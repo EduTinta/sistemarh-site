@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { UserPlus, Save, X, Loader2, Plus, Eye, EyeOff } from 'lucide-react';
 import { api, ApiError } from '../../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -89,6 +89,15 @@ export function NewEmployee() {
     }
   }
 
+  // Só quem está no departamento escolhido pode ser gestor direto.
+  const gestoresDoDepartamento = useMemo(
+    () =>
+      funcionarios
+        .filter((f) => String(f.departamentoId) === formData.departamentoId)
+        .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')),
+    [funcionarios, formData.departamentoId]
+  );
+
   function handleChange(e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) {
     const { name, value } = e.target;
 
@@ -104,6 +113,13 @@ export function NewEmployee() {
 
     if (name === 'telefone') {
       setFormData((prev) => ({ ...prev, telefone: formatarTelefone(value) }));
+      return;
+    }
+
+    // O gestor direto é escolhido entre as pessoas do departamento: ao trocar
+    // de departamento, o gestor escolhido antes deixa de valer.
+    if (name === 'departamentoId') {
+      setFormData((prev) => ({ ...prev, departamentoId: value, gerenteId: '' }));
       return;
     }
 
@@ -473,18 +489,24 @@ export function NewEmployee() {
                   name="gerenteId"
                   value={formData.gerenteId}
                   onChange={handleChange}
-                  disabled={carregandoListas}
+                  disabled={carregandoListas || !formData.departamentoId}
                   className="w-full px-4 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-60"
                 >
-                  <option value="">Nenhum (topo da hierarquia)</option>
-                  {funcionarios.map((f) => (
+                  <option value="">
+                    {!formData.departamentoId
+                      ? 'Selecione o departamento primeiro'
+                      : gestoresDoDepartamento.length === 0
+                        ? 'Ninguém neste departamento ainda (topo da hierarquia)'
+                        : 'Nenhum (topo da hierarquia)'}
+                  </option>
+                  {gestoresDoDepartamento.map((f) => (
                     <option key={f.id} value={f.id}>
                       {f.nome} · {f.cargoNome}
                     </option>
                   ))}
                 </select>
                 <p className="mt-1.5 text-xs text-muted-foreground">
-                  Define onde esse colaborador aparece no Organograma.
+                  Mostra só os colaboradores do departamento selecionado. Define onde esse colaborador aparece no Organograma.
                 </p>
               </div>
             </div>
