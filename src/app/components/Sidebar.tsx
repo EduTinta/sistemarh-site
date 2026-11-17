@@ -36,7 +36,7 @@ export function Sidebar({ activeView, onViewChange, isOpen, onClose }: SidebarPr
 
       <aside
         className={`sidebar fixed lg:static inset-y-0 left-0 z-50 transform transition-transform duration-300 ease-in-out ${
-          isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
+          isOpen ? 'translate-x-0 sidebar-aberta' : '-translate-x-full lg:translate-x-0'
         }`}
       >
         <div className="flex items-start justify-between mb-6">

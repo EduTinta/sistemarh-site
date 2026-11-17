@@ -79,23 +79,6 @@
 }
 
 /* Organograma */
-.card-funcionario {
-  background-color: white;
-  border: 2px solid #ddd;
-  border-radius: 8px;
-  padding: 15px;
-  text-align: center;
-  cursor: pointer;
-  width: 100%;
-  max-width: 200px;
-  min-width: 140px;
-  box-sizing: border-box;
-}
-
-.card-funcionario:hover {
-  border-color: #3b82f6;
-}
-
 .avatar-funcionario {
   width: 60px;
   height: 60px;
@@ -109,50 +92,175 @@
   font-weight: bold;
 }
 
-/* Área com rolagem própria do organograma: barras sempre visíveis, mais
-   grossas e com o polegar em cor de destaque (só nesta tela). */
-.organograma-scroll {
-  overflow-x: scroll;
-  overflow-y: auto;
+/* Área de visualização do organograma: a única parte da tela que rola.
+   Barras finas e discretas, que só aparecem quando a árvore não cabe. O
+   fundo pontilhado acompanha a rolagem e deixa claro que dá pra arrastar. */
+.org-area {
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+  background-color: #f8fafc;
+  background-image: radial-gradient(#e2e8f0 1px, transparent 1px);
+  background-size: 20px 20px;
+  background-attachment: local;
+  cursor: grab;
 }
 
-/* Barra horizontal espelhada no topo da árvore. */
-.organograma-scroll-topo {
-  overflow-y: hidden;
+.org-area.arrastando,
+.org-area.arrastando * {
+  cursor: grabbing;
+}
+
+/* Árvore: cada <li> é um colaborador e cada <ul> interno, a equipe dele —
+   em fileira (.org-ramo) ou, quando ninguém da equipe tem subordinados, em
+   coluna (.org-pilha), o que deixa a árvore bem mais estreita. As linhas de
+   ligação são bordas de 2px nos pseudo-elementos, centradas no card. */
+.org-arvore {
+  --org-linha: #cbd5e1;
+  --org-haste: 24px;
+}
+
+.org-arvore,
+.org-arvore ul {
+  display: flex;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.org-arvore li {
+  position: relative;
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 10px;
 }
 
-.organograma-scroll::-webkit-scrollbar {
-  width: 12px;
+/* Haste que desce do gestor (do botão com a quantidade) até a equipe. */
+.org-arvore ul {
+  position: relative;
+  padding-top: var(--org-haste);
+}
+
+.org-arvore ul::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: calc(50% - 1px);
+  height: var(--org-haste);
+  border-left: 2px solid var(--org-linha);
+}
+
+.org-arvore li::before,
+.org-arvore li::after {
+  position: absolute;
+}
+
+/* --- Equipe em fileira: barra horizontal + haste até cada card --- */
+.org-ramo > li {
+  padding-top: var(--org-haste);
+}
+
+.org-ramo > li::before {
+  content: '';
+  top: 0;
+  left: 0;
+  right: 0;
+  border-top: 2px solid var(--org-linha);
+}
+
+.org-ramo > li::after {
+  content: '';
+  top: 0;
+  left: calc(50% - 1px);
+  height: var(--org-haste);
+  border-left: 2px solid var(--org-linha);
+}
+
+/* O primeiro e o último fecham a barra com uma curva. */
+.org-ramo > li:first-child::before,
+.org-ramo > li:last-child::before {
+  display: none;
+}
+
+.org-ramo > li:first-child::after {
+  right: 0;
+  border-top: 2px solid var(--org-linha);
+  border-top-left-radius: 10px;
+}
+
+.org-ramo > li:last-child::after {
+  left: 0;
+  right: calc(50% - 1px);
+  border-left: none;
+  border-right: 2px solid var(--org-linha);
+  border-top: 2px solid var(--org-linha);
+  border-top-right-radius: 10px;
+}
+
+/* Subordinado único: só a haste reta, sem barra. */
+.org-ramo > li:only-child::after {
+  left: calc(50% - 1px);
+  right: auto;
+  border-top: none;
+  border-right: none;
+  border-left: 2px solid var(--org-linha);
+  border-radius: 0;
+}
+
+/* --- Equipe em coluna: a haste do gestor dobra para a esquerda e vira um
+   trilho vertical, com uma ponta até o meio de cada card. --- */
+.org-pilha {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.org-pilha::after {
+  content: '';
+  position: absolute;
+  top: calc(var(--org-haste) - 2px);
+  left: 8px;
+  right: calc(50% - 1px);
   height: 12px;
+  border-top: 2px solid var(--org-linha);
+  border-left: 2px solid var(--org-linha);
+  border-top-left-radius: 8px;
 }
 
-.organograma-scroll::-webkit-scrollbar-track {
-  background-color: #e5e7eb;
-  border-radius: 6px;
+/* 12px de espaço acima de cada card (o meio do card fica em 50% + 6px). */
+.org-pilha > li {
+  padding: 12px 0 0 20px;
 }
 
-.organograma-scroll::-webkit-scrollbar-thumb {
-  background-color: #3b82f6;
-  border-radius: 6px;
+.org-pilha > li::before {
+  content: '';
+  top: 0;
+  bottom: 0;
+  left: 8px;
+  border-left: 2px solid var(--org-linha);
 }
 
-.organograma-scroll::-webkit-scrollbar-thumb:hover {
-  background-color: #2563eb;
+.org-pilha > li::after {
+  content: '';
+  top: calc(50% + 5px);
+  left: 8px;
+  width: 12px;
+  border-top: 2px solid var(--org-linha);
 }
 
-.organograma-scroll::-webkit-scrollbar-corner {
-  background-color: #e5e7eb;
+/* No último, o trilho termina numa curva que entra no card. */
+.org-pilha > li:last-child::before {
+  bottom: auto;
+  height: calc(50% + 7px);
+  width: 12px;
+  border-bottom: 2px solid var(--org-linha);
+  border-bottom-left-radius: 8px;
 }
 
-/* Firefox não tem ::-webkit-scrollbar e usa as propriedades padrão. Elas
-   ficam só aqui porque, no Chrome/Edge, scrollbar-color/scrollbar-width têm
-   prioridade e fariam a espessura de 12px acima ser ignorada. */
-@supports not selector(::-webkit-scrollbar) {
-  .organograma-scroll {
-    scrollbar-width: auto;
-    scrollbar-color: #3b82f6 #e5e7eb;
-  }
+.org-pilha > li:last-child::after {
+  display: none;
 }
 
 /* Modal */
@@ -222,6 +330,11 @@
     position: fixed;
     width: 260px;
     max-width: 80vw;
+  }
+
+  /* Sombra só com o menu aberto: escondido (fora da tela), ela vazava
+     na borda esquerda de todas as telas no celular. */
+  .sidebar.sidebar-aberta {
     box-shadow: 4px 0 16px rgba(0, 0, 0, 0.2);
   }
 }
@@ -250,12 +363,6 @@
 
   .linha-info > span:last-child {
     text-align: left;
-  }
-
-  .card-funcionario {
-    max-width: 160px;
-    min-width: 120px;
-    padding: 12px;
   }
 
   .avatar-funcionario {
