@@ -1,5 +1,5 @@
 import { Mail, Phone, X, Loader2, UserMinus, Smartphone, KeyRound } from 'lucide-react';
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import '../styles/hr-system.css';
 import { api, ApiError } from '../../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -25,15 +25,118 @@ function montarArvore(funcionarios: FuncionarioDto[]): NoOrganograma[] {
   const porId = new Map<number, NoOrganograma>(funcionarios.map((f) => [f.id, { ...f, subordinados: [] }]));
   const raizes: NoOrganograma[] = [];
 
+  // Gestor desligado (fora da lista) ou o próprio funcionário como gestor:
+  // o nó vira raiz e continua visível.
   for (const no of porId.values()) {
-    if (no.gerenteId !== null && porId.has(no.gerenteId)) {
-      porId.get(no.gerenteId)!.subordinados.push(no);
+    const gestor = no.gerenteId !== null && no.gerenteId !== no.id ? porId.get(no.gerenteId) : undefined;
+    if (gestor) {
+      gestor.subordinados.push(no);
     } else {
       raizes.push(no);
     }
   }
 
+  // Um ciclo de gestores (A → B → A) deixaria esses nós fora da árvore — e o
+  // card desenha os subordinados recursivamente. Quem não for alcançável a
+  // partir de uma raiz vira raiz também, separado do "gestor" do ciclo.
+  const visitados = new Set<number>();
+  const visitar = (no: NoOrganograma) => {
+    if (visitados.has(no.id)) return;
+    visitados.add(no.id);
+    no.subordinados.forEach(visitar);
+  };
+  raizes.forEach(visitar);
+
+  for (const no of porId.values()) {
+    if (visitados.has(no.id)) continue;
+    const gestor = no.gerenteId !== null ? porId.get(no.gerenteId) : undefined;
+    if (gestor) gestor.subordinados = gestor.subordinados.filter((s) => s.id !== no.id);
+    raizes.push(no);
+    visitar(no);
+  }
+
   return raizes;
+}
+
+/**
+ * Área do organograma com rolagem própria, limitada à altura da janela: as
+ * barras horizontal e vertical ficam sempre à vista, sem precisar rolar a
+ * página até o fim. Quando a árvore é mais larga que a tela, aparece também
+ * uma barra horizontal espelhada no topo, sincronizada com a de baixo.
+ */
+function AreaRolagemOrganograma({ children }: { children: ReactNode }) {
+  const areaRef = useRef<HTMLDivElement>(null);
+  const conteudoRef = useRef<HTMLDivElement>(null);
+  const barraTopoRef = useRef<HTMLDivElement>(null);
+  const [larguraConteudo, setLarguraConteudo] = useState(0);
+  const [temRolagemHorizontal, setTemRolagemHorizontal] = useState(false);
+  const jaCentralizou = useRef(false);
+
+  useEffect(() => {
+    const area = areaRef.current;
+    const conteudo = conteudoRef.current;
+    if (!area || !conteudo) return;
+
+    const medir = () => {
+      setLarguraConteudo(area.scrollWidth);
+      const sobraHorizontal = area.scrollWidth - area.clientWidth;
+      setTemRolagemHorizontal(sobraHorizontal > 1);
+
+      // O card do topo (CEO) fica centralizado sobre a árvore inteira; numa
+      // árvore larga ele começaria fora da tela. Na primeira medição a área
+      // já abre rolada até o meio — depois disso o usuário manda na rolagem.
+      if (!jaCentralizou.current && sobraHorizontal > 1) {
+        area.scrollLeft = sobraHorizontal / 2;
+        jaCentralizou.current = true;
+      }
+    };
+    medir();
+
+    // Reage tanto ao redimensionamento da janela quanto à árvore mudando.
+    const observador = new ResizeObserver(medir);
+    observador.observe(area);
+    observador.observe(conteudo);
+    return () => observador.disconnect();
+  }, []);
+
+  // Copia a posição proporcional de uma barra pra outra. A tolerância de 1px
+  // evita que as duas fiquem se reajustando em loop.
+  function sincronizar(origem: HTMLDivElement | null, destino: HTMLDivElement | null) {
+    if (!origem || !destino) return;
+    const maxOrigem = origem.scrollWidth - origem.clientWidth;
+    const maxDestino = destino.scrollWidth - destino.clientWidth;
+    const alvo = maxOrigem > 0 ? (origem.scrollLeft / maxOrigem) * maxDestino : 0;
+    if (Math.abs(destino.scrollLeft - alvo) > 1) destino.scrollLeft = alvo;
+  }
+
+  // Quando a barra do topo aparece, já começa na mesma posição da área.
+  useEffect(() => {
+    if (temRolagemHorizontal) sincronizar(areaRef.current, barraTopoRef.current);
+  }, [temRolagemHorizontal, larguraConteudo]);
+
+  return (
+    <div className="flex-1 min-h-[280px] flex flex-col">
+      {temRolagemHorizontal && (
+        <div
+          ref={barraTopoRef}
+          className="organograma-scroll organograma-scroll-topo mb-2"
+          onScroll={() => sincronizar(barraTopoRef.current, areaRef.current)}
+          aria-hidden="true"
+        >
+          <div style={{ width: larguraConteudo, height: 1 }} />
+        </div>
+      )}
+      <div
+        ref={areaRef}
+        className="organograma-scroll flex-1 min-h-0 rounded-lg border border-gray-200 p-4"
+        onScroll={() => sincronizar(areaRef.current, barraTopoRef.current)}
+      >
+        <div ref={conteudoRef} className="w-max min-w-full">
+          {children}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 const TAMANHO_MINIMO_SENHA_APP = 6;
@@ -342,8 +445,10 @@ export function Organogram() {
   const raizes = useMemo(() => montarArvore(funcionarios), [funcionarios]);
 
   return (
-    <div className="w-full max-w-7xl mx-auto">
-      <div className="mb-6 sm:mb-8">
+    // Ocupa a altura do <main>: assim a área da árvore abaixo do cabeçalho
+    // (inclusive a topbar no celular) fica com a altura que sobra na janela.
+    <div className="w-full max-w-7xl mx-auto h-full flex flex-col">
+      <div className="mb-6 sm:mb-8 shrink-0">
         <h1 className="m-0 text-2xl sm:text-3xl lg:text-[32px] text-gray-800 font-semibold">Organograma</h1>
         <p className="mt-1 text-sm sm:text-base text-gray-500">Estrutura organizacional da empresa</p>
       </div>
@@ -364,7 +469,7 @@ export function Organogram() {
       )}
 
       {!carregando && !erro && raizes.length > 0 && (
-        <div className="-mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8 overflow-x-auto pb-8">
+        <AreaRolagemOrganograma>
           <div className="flex flex-col items-start gap-10">
             {raizes.map((raiz) => (
               <div key={raiz.id} className="flex justify-center min-w-max">
@@ -377,7 +482,7 @@ export function Organogram() {
               </div>
             ))}
           </div>
-        </div>
+        </AreaRolagemOrganograma>
       )}
     </div>
   );

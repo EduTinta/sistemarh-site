@@ -109,6 +109,52 @@
   font-weight: bold;
 }
 
+/* Área com rolagem própria do organograma: barras sempre visíveis, mais
+   grossas e com o polegar em cor de destaque (só nesta tela). */
+.organograma-scroll {
+  overflow-x: scroll;
+  overflow-y: auto;
+}
+
+/* Barra horizontal espelhada no topo da árvore. */
+.organograma-scroll-topo {
+  overflow-y: hidden;
+  flex-shrink: 0;
+}
+
+.organograma-scroll::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.organograma-scroll::-webkit-scrollbar-track {
+  background-color: #e5e7eb;
+  border-radius: 6px;
+}
+
+.organograma-scroll::-webkit-scrollbar-thumb {
+  background-color: #3b82f6;
+  border-radius: 6px;
+}
+
+.organograma-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: #2563eb;
+}
+
+.organograma-scroll::-webkit-scrollbar-corner {
+  background-color: #e5e7eb;
+}
+
+/* Firefox não tem ::-webkit-scrollbar e usa as propriedades padrão. Elas
+   ficam só aqui porque, no Chrome/Edge, scrollbar-color/scrollbar-width têm
+   prioridade e fariam a espessura de 12px acima ser ignorada. */
+@supports not selector(::-webkit-scrollbar) {
+  .organograma-scroll {
+    scrollbar-width: auto;
+    scrollbar-color: #3b82f6 #e5e7eb;
+  }
+}
+
 /* Modal */
 .modal-fundo {
   position: fixed;
@@ -217,4 +263,18 @@
     height: 50px;
     font-size: 14px;
   }
+}
+
+/* Barra de rolagem fina no menu lateral: a padrão (~15px) roubava espaço e
+   quebrava os rótulos do submenu em duas linhas em telas mais baixas. */
+.sidebar nav {
+  scrollbar-width: thin;
+  scrollbar-color: #4b5563 transparent;
+}
+.sidebar nav::-webkit-scrollbar {
+  width: 6px;
+}
+.sidebar nav::-webkit-scrollbar-thumb {
+  background-color: #4b5563;
+  border-radius: 3px;
 }

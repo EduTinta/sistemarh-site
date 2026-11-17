@@ -5,6 +5,7 @@ import { Dashboard } from './components/Dashboard';
 import { Organogram } from './components/Organogram';
 import { EmployeeProfile } from './components/EmployeeProfile';
 import { NewEmployee } from './components/NewEmployee';
+import { BuscarColaborador } from './components/BuscarColaborador';
 import { Permissions } from './components/Permissions';
 import { SalaryAdjustment } from './components/SalaryAdjustment';
 import { MealVoucherAdjustment } from './components/MealVoucherAdjustment';
@@ -14,7 +15,7 @@ import { PontoEquipe } from './components/PontoEquipe';
 import { Login } from './components/Login';
 import { AuthProvider, useAuth } from './context/AuthContext';
 
-type ViewType = 'dashboard' | 'organogram' | 'profile' | 'newEmployee' | 'permissions' | 'salaryAdjustment' | 'mealVoucherAdjustment' | 'promotions' | 'solicitacoes' | 'pontoEquipe';
+type ViewType = 'dashboard' | 'organogram' | 'profile' | 'buscarColaborador' | 'newEmployee' | 'permissions' | 'salaryAdjustment' | 'mealVoucherAdjustment' | 'promotions' | 'solicitacoes' | 'pontoEquipe';
 
 export default function App() {
   return (
@@ -45,6 +46,7 @@ function AppGate() {
 
 const VIEWS_RH_OU_ADMIN: ViewType[] = [
   'organogram',
+  'buscarColaborador',
   'newEmployee',
   'permissions',
   'salaryAdjustment',
@@ -89,7 +91,10 @@ function AuthenticatedApp() {
           >
             <Menu size={24} />
           </button>
-          <h1 className="text-base font-semibold text-gray-800 truncate">Sistema RH</h1>
+          <div className="flex items-center gap-2 min-w-0">
+            <img src="/logo-humanconnect-icone.png" alt="" className="w-7 h-7 rounded-md shrink-0" />
+            <h1 className="text-base font-semibold text-gray-800 truncate">HumanConnect</h1>
+          </div>
           <div className="w-10" />
         </header>
 
@@ -97,6 +102,7 @@ function AuthenticatedApp() {
           {viewEfetiva === 'dashboard' && <Dashboard />}
           {viewEfetiva === 'organogram' && <Organogram />}
           {viewEfetiva === 'profile' && <EmployeeProfile />}
+          {viewEfetiva === 'buscarColaborador' && <BuscarColaborador />}
           {viewEfetiva === 'newEmployee' && <NewEmployee />}
           {viewEfetiva === 'permissions' && <Permissions />}
           {viewEfetiva === 'salaryAdjustment' && <SalaryAdjustment />}

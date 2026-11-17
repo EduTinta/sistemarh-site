@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { LayoutDashboard, Network, User, UserPlus, Shield, Users, DollarSign, Utensils, TrendingUp, X, LogOut, ClipboardCheck, Clock } from 'lucide-react';
+import { LayoutDashboard, Network, User, Search, UserPlus, Shield, Users, DollarSign, Utensils, TrendingUp, X, LogOut, ClipboardCheck, Clock } from 'lucide-react';
 import '../styles/hr-system.css';
 import { useAuth } from '../context/AuthContext';
 
-type ViewType = 'dashboard' | 'organogram' | 'profile' | 'newEmployee' | 'permissions' | 'salaryAdjustment' | 'mealVoucherAdjustment' | 'promotions' | 'solicitacoes' | 'pontoEquipe';
+type ViewType = 'dashboard' | 'organogram' | 'profile' | 'buscarColaborador' | 'newEmployee' | 'permissions' | 'salaryAdjustment' | 'mealVoucherAdjustment' | 'promotions' | 'solicitacoes' | 'pontoEquipe';
 
 interface SidebarProps {
   activeView: ViewType;
@@ -40,9 +40,16 @@ export function Sidebar({ activeView, onViewChange, isOpen, onClose }: SidebarPr
         }`}
       >
         <div className="flex items-start justify-between mb-6">
-          <div>
-            <h2 style={{ margin: 0, fontSize: '22px' }}>Sistema RH</h2>
-            <p style={{ margin: '5px 0 0 0', fontSize: '12px', opacity: 0.7 }}>Gestão de Pessoas</p>
+          <div className="flex items-center gap-3 min-w-0">
+            <img
+              src="/logo-humanconnect-icone.png"
+              alt=""
+              className="w-11 h-11 rounded-xl shrink-0"
+            />
+            <div className="min-w-0">
+              <h2 style={{ margin: 0, fontSize: '20px' }}>HumanConnect</h2>
+              <p style={{ margin: '3px 0 0 0', fontSize: '12px', opacity: 0.7 }}>Gestão de Pessoas</p>
+            </div>
           </div>
           <button
             onClick={onClose}
@@ -93,13 +100,21 @@ export function Sidebar({ activeView, onViewChange, isOpen, onClose }: SidebarPr
                 </button>
 
                 {menuAberto && (
-                  <div style={{ marginLeft: '15px' }}>
+                  <div style={{ marginLeft: '8px' }}>
+                    <button
+                      onClick={() => onViewChange('buscarColaborador')}
+                      className={`botao-menu ${activeView === 'buscarColaborador' ? 'ativo' : ''}`}
+                    >
+                      <Search size={18} />
+                      <span style={{ fontSize: '14px', whiteSpace: 'nowrap' }}>Buscar Colaborador</span>
+                    </button>
+
                     <button
                       onClick={() => onViewChange('newEmployee')}
                       className={`botao-menu ${activeView === 'newEmployee' ? 'ativo' : ''}`}
                     >
                       <UserPlus size={18} />
-                      <span style={{ fontSize: '14px' }}>Novo Colaborador</span>
+                      <span style={{ fontSize: '14px', whiteSpace: 'nowrap' }}>Novo Colaborador</span>
                     </button>
 
                     <button
@@ -107,7 +122,7 @@ export function Sidebar({ activeView, onViewChange, isOpen, onClose }: SidebarPr
                       className={`botao-menu ${activeView === 'salaryAdjustment' ? 'ativo' : ''}`}
                     >
                       <DollarSign size={18} />
-                      <span style={{ fontSize: '14px' }}>Ajuste Salarial</span>
+                      <span style={{ fontSize: '14px', whiteSpace: 'nowrap' }}>Ajuste Salarial</span>
                     </button>
 
                     <button
@@ -115,7 +130,7 @@ export function Sidebar({ activeView, onViewChange, isOpen, onClose }: SidebarPr
                       className={`botao-menu ${activeView === 'mealVoucherAdjustment' ? 'ativo' : ''}`}
                     >
                       <Utensils size={18} />
-                      <span style={{ fontSize: '14px' }}>Vale Alimentação</span>
+                      <span style={{ fontSize: '14px', whiteSpace: 'nowrap' }}>Vale Alimentação</span>
                     </button>
 
                     <button
@@ -123,7 +138,7 @@ export function Sidebar({ activeView, onViewChange, isOpen, onClose }: SidebarPr
                       className={`botao-menu ${activeView === 'promotions' ? 'ativo' : ''}`}
                     >
                       <TrendingUp size={18} />
-                      <span style={{ fontSize: '14px' }}>Promoções</span>
+                      <span style={{ fontSize: '14px', whiteSpace: 'nowrap' }}>Promoções</span>
                     </button>
                   </div>
                 )}

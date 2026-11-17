@@ -3,6 +3,9 @@
 // `{ mensagem: "..." }` nas respostas de erro (ver ExceptionMiddleware no backend).
 
 import type {
+  AjusteRemuneracaoDto,
+  AjusteSalarioDto,
+  AjusteValeAlimentacaoDto,
   ApiErrorBody,
   AusenciaRhDto,
   AuthResponseDto,
@@ -13,16 +16,16 @@ import type {
   FuncionarioCreateDto,
   FuncionarioDto,
   FuncionarioUpdateDto,
+  PromocaoDto,
   RecrutamentoDto,
   RegistroPontoRhDto,
   StatusAusencia,
   UsuarioDto,
 } from '../types/api';
 
-// Em dev local isso seria http://localhost:5080, mas o backend está exposto
-// via túnel (Cloudflare) pra o site também poder ser acessado de fora desta
-// máquina — ambos precisam apontar pro mesmo endereço público.
-const BASE_URL = 'https://solved-dish-observer-mix.trycloudflare.com';
+// Backend publicado na Railway (endereço fixo). Pra apontar pro backend
+// rodando localmente, troque por http://localhost:5080.
+const BASE_URL = 'https://backend-production-b0a758c2.up.railway.app';
 
 export class ApiError extends Error {
   status: number;
@@ -139,6 +142,21 @@ export const api = {
   // mesmo e-mail ou redefine a senha do app.
   definirAcessoApp: (token: string, funcionarioId: number, senha: string) =>
     request<FuncionarioDto>(`/api/funcionarios/${funcionarioId}/acesso-app`, { method: 'POST', body: { senha }, token }),
+
+  // Remuneração: cada rota grava o histórico e devolve o funcionário já
+  // atualizado.
+  ajustarSalario: (token: string, funcionarioId: number, dto: AjusteSalarioDto) =>
+    request<FuncionarioDto>(`/api/funcionarios/${funcionarioId}/salario`, { method: 'PUT', body: dto, token }),
+
+  ajustarValeAlimentacao: (token: string, funcionarioId: number, dto: AjusteValeAlimentacaoDto) =>
+    request<FuncionarioDto>(`/api/funcionarios/${funcionarioId}/vale-alimentacao`, { method: 'PUT', body: dto, token }),
+
+  promoverFuncionario: (token: string, funcionarioId: number, dto: PromocaoDto) =>
+    request<FuncionarioDto>(`/api/funcionarios/${funcionarioId}/promocao`, { method: 'POST', body: dto, token }),
+
+  /** Histórico de ajustes do colaborador, mais recentes primeiro. */
+  listarAjustesRemuneracao: (token: string, funcionarioId: number) =>
+    request<AjusteRemuneracaoDto[]>(`/api/funcionarios/${funcionarioId}/ajustes-remuneracao`, { token }),
 
   listarAusenciasRh: (token: string, status?: StatusAusencia) =>
     request<AusenciaRhDto[]>(`/api/rh/ausencias${status !== undefined ? `?status=${status}` : ''}`, { token }),

@@ -1,12 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { UserPlus, Save, X, Loader2, Plus, Eye, EyeOff } from 'lucide-react';
 import { api, ApiError } from '../../services/api';
 import { useAuth } from '../context/AuthContext';
 import type { CargoDto, DepartamentoDto, FuncionarioDto } from '../../types/api';
 import { StatusFuncionario } from '../../types/api';
 import { formatarCpf } from '../../utils/cpf';
+import { contarDigitosTelefone, formatarTelefone } from '../../utils/telefone';
+import { lerValor } from '../../utils/moeda';
 
 const CRIAR_NOVO = '__criar_novo__';
+
+// Mesmo padrão que o backend usa quando o vale não é informado.
+const VALE_ALIMENTACAO_PADRAO = '600';
 
 const FORM_INICIAL = {
   nome: '',
@@ -18,8 +23,12 @@ const FORM_INICIAL = {
   departamentoId: '',
   cargoId: '',
   gerenteId: '',
+  salario: '',
+  valeAlimentacao: VALE_ALIMENTACAO_PADRAO,
   senhaAcessoApp: '',
 };
+
+const MINIMO_DIGITOS_TELEFONE = 10;
 
 const TAMANHO_MINIMO_SENHA_APP = 6;
 
@@ -39,6 +48,16 @@ export function NewEmployee() {
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [sucesso, setSucesso] = useState<string | null>(null);
+
+  // O botão de cadastrar fica no fim do formulário e o aviso no topo: sem
+  // isso, o erro (ou o sucesso, que limpa o formulário) aparece fora da tela
+  // e parece que nada aconteceu.
+  const avisoRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (erro || sucesso) {
+      avisoRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [erro, sucesso]);
   const [mostrarSenhaApp, setMostrarSenhaApp] = useState(false);
 
   const criaAcessoApp = formData.senhaAcessoApp.length > 0;
@@ -83,6 +102,18 @@ export function NewEmployee() {
       return;
     }
 
+    if (name === 'telefone') {
+      setFormData((prev) => ({ ...prev, telefone: formatarTelefone(value) }));
+      return;
+    }
+
+    // Ao escolher o cargo, sugere o salário base dele (o campo continua editável).
+    if (name === 'cargoId') {
+      const cargo = cargos.find((c) => String(c.id) === value);
+      setFormData((prev) => ({ ...prev, cargoId: value, salario: cargo ? String(cargo.salarioBase) : prev.salario }));
+      return;
+    }
+
     setFormData((prev) => ({ ...prev, [name]: value }));
   }
 
@@ -114,6 +145,24 @@ export function NewEmployee() {
       return;
     }
 
+    const digitosTelefone = contarDigitosTelefone(formData.telefone);
+    if (digitosTelefone > 0 && digitosTelefone < MINIMO_DIGITOS_TELEFONE) {
+      setErro('Informe um telefone válido com DDD.');
+      return;
+    }
+
+    // Em branco, o backend usa o salário base do cargo e o vale padrão.
+    const salario = lerValor(formData.salario);
+    if (formData.salario.trim() && (salario === null || salario <= 0)) {
+      setErro('Informe um salário maior que zero.');
+      return;
+    }
+    const valeAlimentacao = lerValor(formData.valeAlimentacao);
+    if (formData.valeAlimentacao.trim() && (valeAlimentacao === null || valeAlimentacao < 0)) {
+      setErro('O vale alimentação não pode ser negativo.');
+      return;
+    }
+
     const email = formData.email.trim();
     if (criaAcessoApp && !email) {
       setErro('Para criar o acesso ao app, informe o e-mail corporativo — é com ele que o colaborador entra no app.');
@@ -136,13 +185,15 @@ export function NewEmployee() {
         departamentoId: Number(formData.departamentoId),
         cargoId: Number(formData.cargoId),
         gerenteId: formData.gerenteId ? Number(formData.gerenteId) : undefined,
+        salario: salario ?? undefined,
+        valeAlimentacao: valeAlimentacao ?? undefined,
         senhaAcessoApp: criaAcessoApp ? formData.senhaAcessoApp : undefined,
       });
       const mensagemApp = criaAcessoApp
         ? ` Ele(a) já pode entrar no app com o e-mail ${criado.email ?? email} e a senha definida.`
         : '';
       setSucesso(
-        `${criado.nome} foi cadastrado(a) com sucesso em ${criado.departamentoNome} e já aparece no Organograma.${mensagemApp}`
+        `${criado.nome} foi cadastrado(a) com sucesso em ${criado.departamentoNome} e já aparece no Organograma e nas listas de colaboradores.${mensagemApp}`
       );
       setFormData(FORM_INICIAL);
       setMostrarSenhaApp(false);
@@ -175,14 +226,16 @@ export function NewEmployee() {
 
       <form onSubmit={handleSubmit} className="hr-card p-4 sm:p-6">
         <div className="space-y-6">
-          {erro && (
-            <div className="px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-600 text-sm">{erro}</div>
-          )}
-          {sucesso && (
-            <div className="px-4 py-3 rounded-lg bg-green-50 border border-green-200 text-green-700 text-sm">
-              {sucesso}
-            </div>
-          )}
+          <div ref={avisoRef} className="space-y-6 empty:hidden scroll-mt-4">
+            {erro && (
+              <div role="alert" className="px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-600 text-sm">{erro}</div>
+            )}
+            {sucesso && (
+              <div role="status" className="px-4 py-3 rounded-lg bg-green-50 border border-green-200 text-green-700 text-sm">
+                {sucesso}
+              </div>
+            )}
+          </div>
 
           {/* Informações Pessoais */}
           <div>
@@ -263,8 +316,11 @@ export function NewEmployee() {
                   type="tel"
                   id="telefone"
                   name="telefone"
+                  inputMode="tel"
+                  autoComplete="tel-national"
                   value={formData.telefone}
                   onChange={handleChange}
+                  maxLength={15}
                   className="w-full px-4 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
                   placeholder="(00) 00000-0000"
                 />
@@ -311,6 +367,43 @@ export function NewEmployee() {
                     </option>
                   ))}
                 </select>
+              </div>
+
+              <div>
+                <label htmlFor="salario" className="block text-sm mb-2">
+                  Salário (R$)
+                </label>
+                <input
+                  type="number"
+                  id="salario"
+                  name="salario"
+                  step="0.01"
+                  min="0.01"
+                  value={formData.salario}
+                  onChange={handleChange}
+                  className="w-full px-4 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                  placeholder="Ex: 5000.00"
+                />
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  Preenchido com o salário base do cargo escolhido; pode ser alterado.
+                </p>
+              </div>
+
+              <div>
+                <label htmlFor="valeAlimentacao" className="block text-sm mb-2">
+                  Vale alimentação (R$)
+                </label>
+                <input
+                  type="number"
+                  id="valeAlimentacao"
+                  name="valeAlimentacao"
+                  step="0.01"
+                  min="0"
+                  value={formData.valeAlimentacao}
+                  onChange={handleChange}
+                  className="w-full px-4 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                  placeholder="Ex: 600.00"
+                />
               </div>
 
               <div className="md:col-span-2">

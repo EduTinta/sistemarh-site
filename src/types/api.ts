@@ -47,6 +47,10 @@ export interface FuncionarioDto {
   gerenteNome: string | null;
   totalSolicitacoesAusencia: number;
   possuiAcessoApp: boolean;
+  // Remuneração atual (R$), alterada pelas rotas de ajuste salarial, de vale
+  // alimentação e de promoção.
+  salario: number;
+  valeAlimentacao: number;
 }
 
 export interface DepartamentoDto {
@@ -80,6 +84,9 @@ export interface FuncionarioCreateDto {
   // Se informada (mín. 6 caracteres), já cria o login do colaborador no app
   // com o e-mail acima — que passa a ser obrigatório.
   senhaAcessoApp?: string;
+  // Sem eles o backend usa o salarioBase do cargo e R$ 600 de vale.
+  salario?: number;
+  valeAlimentacao?: number;
 }
 
 // Igual ao Create, mas sem CPF (imutável depois de cadastrado) nem data de
@@ -92,6 +99,54 @@ export interface FuncionarioUpdateDto {
   departamentoId: number;
   cargoId: number;
   gerenteId?: number | null;
+}
+
+// Corpos das rotas de remuneração. `dataVigencia` no formato YYYY-MM-DD e
+// `motivo` com pelo menos 3 caracteres.
+export interface AjusteSalarioDto {
+  novoSalario: number;
+  dataVigencia: string;
+  motivo: string;
+}
+
+export interface AjusteValeAlimentacaoDto {
+  novoValor: number;
+  dataVigencia: string;
+  motivo: string;
+}
+
+export interface PromocaoDto {
+  novoCargoId: number;
+  novoDepartamentoId: number;
+  novoSalario: number;
+  dataVigencia: string;
+  motivo: string;
+}
+
+// Histórico de remuneração (enum como número): 0 = Salario,
+// 1 = ValeAlimentacao, 2 = Promocao.
+export enum TipoAjusteRemuneracao {
+  Salario = 0,
+  ValeAlimentacao = 1,
+  Promocao = 2,
+}
+
+export interface AjusteRemuneracaoDto {
+  id: number;
+  tipo: TipoAjusteRemuneracao;
+  valorAnterior: number;
+  valorNovo: number;
+  // Só vêm preenchidos nas promoções.
+  cargoAnteriorNome?: string | null;
+  cargoNovoNome?: string | null;
+  departamentoAnteriorNome?: string | null;
+  departamentoNovoNome?: string | null;
+  // Data de calendário ("2026-11-17T00:00:00") — não é um instante.
+  dataVigencia: string;
+  motivo: string;
+  responsavelNome?: string | null;
+  // Instante em UTC (termina com "Z").
+  criadoEm: string;
 }
 
 // TipoLancamentoBancoHoras também é serializado como número: 0 = Credito, 1 = Debito.
