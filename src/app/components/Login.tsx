@@ -33,9 +33,11 @@ export function Login() {
             style={{ background: 'rgba(255,255,255,0.1)' }}
             aria-hidden="true"
           />
-          <div className="relative w-32 mx-auto rounded-2xl bg-white p-2.5 mb-4 shadow-lg overflow-hidden">
-            <img src="/logo-humanconnect.jpg" alt="HumanConnect" className="w-full h-full object-contain rounded-lg" />
-          </div>
+          <img
+            src="/logo-humanconnect.jpg"
+            alt="HumanConnect"
+            className="relative block w-28 mx-auto mb-4 rounded-2xl shadow-lg"
+          />
           <p className="relative text-sm text-white/80 mt-1">Entre com sua conta para continuar</p>
         </div>
 
