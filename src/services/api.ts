@@ -118,6 +118,8 @@ export const api = {
 
   listarFuncionarios: (token: string) => request<FuncionarioDto[]>('/api/funcionarios', { token }),
 
+  obterFuncionario: (token: string, id: number) => request<FuncionarioDto>(`/api/funcionarios/${id}`, { token }),
+
   listarDepartamentos: (token: string) => request<DepartamentoDto[]>('/api/departamentos', { token }),
 
   listarCargos: (token: string) => request<CargoDto[]>('/api/cargos', { token }),
