@@ -1,21 +1,4 @@
-import {
-  Mail,
-  Phone,
-  X,
-  Loader2,
-  UserMinus,
-  Smartphone,
-  KeyRound,
-  ChevronDown,
-  ChevronUp,
-  ChevronsDownUp,
-  ChevronsUpDown,
-  Minus,
-  Plus,
-  Scan,
-  Move,
-  Users,
-} from 'lucide-react';
+import { Mail, Phone, X, Loader2, UserMinus, Smartphone, KeyRound } from 'lucide-react';
 import {
   useEffect,
   useLayoutEffect,
@@ -25,7 +8,6 @@ import {
   type FormEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
-  type ReactNode,
 } from 'react';
 import '../styles/hr-system.css';
 import { api, ApiError } from '../../services/api';
@@ -98,36 +80,8 @@ function percorrer(raizes: NoOrganograma[], visitar: (no: NoOrganograma, nivel: 
   raizes.forEach((raiz) => descer(raiz, 0));
 }
 
-// Ao abrir a tela, os ramos até este nível já vêm expandidos (raiz e
-// diretoria) — os demais mostram só o botão com a quantidade de subordinados.
-const NIVEIS_ABERTOS = 2;
-
-// Zoom do organograma: limites, passo dos botões e o mínimo em que o texto
-// dos cards ainda é confortável de ler (usado pra decidir a visão inicial).
-// O mínimo é baixo pra "Ajustar à tela" encaixar a árvore inteira até no
-// celular — aí serve de mapa, e o zoom/arrasto levam até a parte desejada.
-const ZOOM_MINIMO = 0.1;
-const ZOOM_MAXIMO = 1.5;
-const PASSO_ZOOM = 0.1;
-const ZOOM_LEGIVEL = 0.8;
-// Espaço livre em volta da árvore, dentro da área de visualização.
-const MARGEM_AREA = 24;
 // Quanto o mouse precisa andar pra virar "arrastar" em vez de clique.
 const LIMIAR_ARRASTO = 5;
-
-function limitarZoom(zoom: number): number {
-  return Math.min(ZOOM_MAXIMO, Math.max(ZOOM_MINIMO, Math.round(zoom * 100) / 100));
-}
-
-// Ajuste de rolagem a aplicar logo depois que o React redesenhar a árvore:
-// - "ponto": um ponto do conteúdo (em px sem zoom) volta pra mesma posição
-//   da tela — usado no zoom, pra ampliar em volta do centro ou do mouse;
-// - "card": o card clicado fica parado onde estava ao abrir/fechar um ramo;
-// - "raiz": centraliza o topo da hierarquia (visão inicial e "ajustar").
-type AjusteRolagem =
-  | { tipo: 'ponto'; x: number; y: number; telaX: number; telaY: number }
-  | { tipo: 'card'; id: number; telaX: number; telaY: number }
-  | { tipo: 'raiz' };
 
 function CardColaborador({
   funcionario,
@@ -175,62 +129,28 @@ function CardColaborador({
   );
 }
 
-/** Um nó da árvore: o card, o botão de abrir/fechar o ramo e, se aberto, os
- * subordinados. As linhas entre gestor e subordinados vêm do CSS (.org-arvore). */
+/** Um nó da árvore: o card e, embaixo, a equipe dele. As linhas entre gestor
+ * e subordinados vêm do CSS (.org-arvore). */
 function NoArvore({
   no,
-  abertos,
   idDestaque,
   onAbrir,
-  onAlternar,
 }: {
   no: NoOrganograma;
-  abertos: Set<number>;
   idDestaque: number;
   onAbrir: (no: NoOrganograma) => void;
-  onAlternar: (id: number) => void;
 }) {
-  const quantidade = no.subordinados.length;
-  const aberto = quantidade > 0 && abertos.has(no.id);
   // Equipe em que ninguém tem subordinados fica em coluna, um card embaixo
   // do outro — em fileira, uma equipe grande esticaria a árvore pros lados.
-  const emColuna = quantidade > 1 && no.subordinados.every((sub) => sub.subordinados.length === 0);
-  const rotulo = `${aberto ? 'Recolher' : 'Mostrar'} ${quantidade} subordinado${quantidade > 1 ? 's' : ''} de ${no.nome}`;
+  const emColuna = no.subordinados.length > 1 && no.subordinados.every((sub) => sub.subordinados.length === 0);
 
   return (
     <li>
-      <div className="relative">
-        <CardColaborador funcionario={no} destaque={no.id === idDestaque} onAbrir={() => onAbrir(no)} />
-        {quantidade > 0 && (
-          <button
-            type="button"
-            onClick={() => onAlternar(no.id)}
-            aria-expanded={aberto}
-            aria-label={rotulo}
-            title={rotulo}
-            className={`absolute left-1/2 -translate-x-1/2 -bottom-3 z-10 h-6 min-w-6 px-1.5 inline-flex items-center justify-center gap-0.5 rounded-full border text-[11px] font-semibold leading-none shadow-sm cursor-pointer transition-colors ${
-              aberto
-                ? 'bg-white border-gray-300 text-gray-500 hover:border-primary hover:text-primary'
-                : 'bg-primary border-primary text-primary-foreground hover:opacity-90'
-            }`}
-          >
-            {quantidade}
-            {aberto ? <ChevronUp size={12} strokeWidth={2.5} /> : <ChevronDown size={12} strokeWidth={2.5} />}
-          </button>
-        )}
-      </div>
-
-      {aberto && (
+      <CardColaborador funcionario={no} destaque={no.id === idDestaque} onAbrir={() => onAbrir(no)} />
+      {no.subordinados.length > 0 && (
         <ul className={emColuna ? 'org-pilha' : 'org-ramo'}>
           {no.subordinados.map((sub) => (
-            <NoArvore
-              key={sub.id}
-              no={sub}
-              abertos={abertos}
-              idDestaque={idDestaque}
-              onAbrir={onAbrir}
-              onAlternar={onAlternar}
-            />
+            <NoArvore key={sub.id} no={sub} idDestaque={idDestaque} onAbrir={onAbrir} />
           ))}
         </ul>
       )}
@@ -238,193 +158,33 @@ function NoArvore({
   );
 }
 
-const classeBotaoFerramenta =
-  'h-8 inline-flex items-center justify-center gap-1.5 rounded-lg text-sm text-gray-600 cursor-pointer transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:opacity-40 disabled:cursor-default disabled:hover:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary';
-
-function BotaoFerramenta({
-  rotulo,
-  onClick,
-  disabled,
-  className = '',
-  children,
-}: {
-  rotulo: string;
-  onClick: () => void;
-  disabled?: boolean;
-  className?: string;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={rotulo}
-      aria-label={rotulo}
-      className={`${classeBotaoFerramenta} ${className}`}
-    >
-      {children}
-    </button>
-  );
-}
-
 /**
- * Área de visualização do organograma: uma única região com rolagem (as
- * barras só aparecem quando a árvore não cabe), zoom e "arrastar para mover".
- * A roda do mouse rola normalmente (Shift + roda rola na horizontal) e
- * Ctrl + roda — ou o gesto de pinça no touchpad — muda o zoom. No celular,
- * o arrasto é a própria rolagem por toque do navegador.
+ * Área do organograma: a única parte da tela que rola (barras finas, só
+ * quando a árvore não cabe). Abre centralizada no topo da hierarquia e, com
+ * o mouse, dá pra clicar e arrastar o fundo pra mover a visão.
  */
 function VisualizacaoOrganograma({
   raizes,
-  total,
-  abertos,
-  tudoAberto,
-  onAlternar,
-  onAlternarTudo,
   onAbrir,
 }: {
   raizes: NoOrganograma[];
-  total: number;
-  abertos: Set<number>;
-  tudoAberto: boolean;
-  onAlternar: (id: number) => void;
-  onAlternarTudo: () => void;
   onAbrir: (no: NoOrganograma) => void;
 }) {
   const areaRef = useRef<HTMLDivElement>(null);
-  const conteudoRef = useRef<HTMLDivElement>(null);
-  const [zoom, setZoom] = useState(1);
-  const zoomRef = useRef(zoom);
-  zoomRef.current = zoom;
-  const ajusteRef = useRef<AjusteRolagem | null>(null);
-
   const [principal, ...semGestor] = raizes;
 
-  // --- Rolagem e zoom -------------------------------------------------------
-
-  function centralizarNaRaiz() {
+  // Centraliza o card do topo da hierarquia ao abrir a tela.
+  useLayoutEffect(() => {
     const area = areaRef.current;
     const card = area?.querySelector<HTMLElement>(`[data-no="${principal.id}"]`);
     if (!area || !card) return;
     const a = area.getBoundingClientRect();
     const c = card.getBoundingClientRect();
     area.scrollLeft += c.left + c.width / 2 - (a.left + area.clientWidth / 2);
-    area.scrollTop = 0;
-  }
-
-  /** Maior zoom (até 100%) em que a árvore inteira cabe na área. */
-  function zoomQueCabe(): number {
-    const area = areaRef.current;
-    const conteudo = conteudoRef.current;
-    if (!area || !conteudo) return 1;
-    const r = conteudo.getBoundingClientRect();
-    const largura = r.width / zoomRef.current;
-    const altura = r.height / zoomRef.current;
-    const cabe = Math.min(
-      (area.clientWidth - 2 * MARGEM_AREA) / largura,
-      (area.clientHeight - 2 * MARGEM_AREA) / altura
-    );
-    return Math.max(ZOOM_MINIMO, Math.min(1, Math.floor(cabe * 100) / 100));
-  }
-
-  /** Muda o zoom mantendo parado o ponto da tela informado (padrão: o centro da área). */
-  function mudarZoom(novo: number, telaX?: number, telaY?: number) {
-    const area = areaRef.current;
-    const conteudo = conteudoRef.current;
-    const atual = zoomRef.current;
-    const alvo = limitarZoom(novo);
-    if (!area || !conteudo || alvo === atual) return;
-    const a = area.getBoundingClientRect();
-    const c = conteudo.getBoundingClientRect();
-    const x = telaX ?? a.left + area.clientWidth / 2;
-    const y = telaY ?? a.top + area.clientHeight / 2;
-    ajusteRef.current = { tipo: 'ponto', x: (x - c.left) / atual, y: (y - c.top) / atual, telaX: x, telaY: y };
-    setZoom(alvo);
-  }
-
-  function ajustarATela() {
-    ajusteRef.current = { tipo: 'raiz' };
-    const cabe = zoomQueCabe();
-    if (cabe === zoomRef.current) centralizarNaRaiz();
-    else setZoom(cabe);
-  }
-
-  // Abrir/fechar um ramo muda a largura da árvore e tudo se reacomoda; o
-  // card clicado fica parado na tela pra pessoa não se perder.
-  function fixarCard(id: number) {
-    const card = areaRef.current?.querySelector<HTMLElement>(`[data-no="${id}"]`);
-    if (!card) return;
-    const c = card.getBoundingClientRect();
-    ajusteRef.current = { tipo: 'card', id, telaX: c.left, telaY: c.top };
-  }
-
-  function alternarRamo(id: number) {
-    fixarCard(id);
-    onAlternar(id);
-  }
-
-  function alternarTudo() {
-    fixarCard(principal.id);
-    onAlternarTudo();
-  }
-
-  // Visão inicial: se a árvore inteira cabe com o texto legível, já abre
-  // ajustada à tela; senão abre em 100% centralizada no topo da hierarquia.
-  useLayoutEffect(() => {
-    const cabe = zoomQueCabe();
-    if (cabe < 1 && cabe >= ZOOM_LEGIVEL) {
-      ajusteRef.current = { tipo: 'raiz' };
-      setZoom(cabe);
-    } else {
-      centralizarNaRaiz();
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Aplica o ajuste pendente com a árvore já redesenhada (antes de pintar a
-  // tela, então não há "pulo" visível).
-  useLayoutEffect(() => {
-    const ajuste = ajusteRef.current;
-    const area = areaRef.current;
-    ajusteRef.current = null;
-    if (!ajuste || !area) return;
-
-    if (ajuste.tipo === 'raiz') {
-      centralizarNaRaiz();
-    } else if (ajuste.tipo === 'ponto') {
-      const c = conteudoRef.current?.getBoundingClientRect();
-      if (!c) return;
-      area.scrollLeft += c.left + ajuste.x * zoom - ajuste.telaX;
-      area.scrollTop += c.top + ajuste.y * zoom - ajuste.telaY;
-    } else {
-      const card = area.querySelector<HTMLElement>(`[data-no="${ajuste.id}"]`);
-      if (!card) return;
-      const c = card.getBoundingClientRect();
-      area.scrollLeft += c.left - ajuste.telaX;
-      area.scrollTop += c.top - ajuste.telaY;
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [zoom, abertos]);
-
-  // Ctrl + roda (e a pinça do touchpad, que chega igual) dá zoom em volta do
-  // mouse. Precisa de listener nativo não-passivo pra impedir o zoom da página.
-  const mudarZoomRef = useRef(mudarZoom);
-  mudarZoomRef.current = mudarZoom;
-  useEffect(() => {
-    const area = areaRef.current;
-    if (!area) return;
-    const aoRolar = (e: WheelEvent) => {
-      if (!e.ctrlKey) return;
-      e.preventDefault();
-      mudarZoomRef.current(zoomRef.current * Math.exp(-e.deltaY / 400), e.clientX, e.clientY);
-    };
-    area.addEventListener('wheel', aoRolar, { passive: false });
-    return () => area.removeEventListener('wheel', aoRolar);
-  }, []);
-
-  // --- Arrastar para mover (mouse) ------------------------------------------
-
+  // --- Arrastar para mover (mouse; no celular vale a rolagem por toque) ---
   const arrastoRef = useRef<{ id: number; x: number; y: number; left: number; top: number; movendo: boolean } | null>(
     null
   );
@@ -435,7 +195,6 @@ function VisualizacaoOrganograma({
 
   function aoPressionar(e: ReactPointerEvent<HTMLDivElement>) {
     arrastouRef.current = false;
-    // Toque usa a rolagem nativa do navegador; aqui é só o botão esquerdo do mouse.
     if (e.pointerType === 'touch' || e.button !== 0) return;
     const area = e.currentTarget;
     const r = area.getBoundingClientRect();
@@ -488,113 +247,34 @@ function VisualizacaoOrganograma({
     e.preventDefault();
   }
 
-  const porcentagem = Math.round(zoom * 100);
-
   return (
-    <div className="flex-1 min-h-[320px] flex flex-col rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
-      {/* Barra de ferramentas */}
-      <div className="shrink-0 flex items-center justify-between gap-2 px-2 sm:px-3 py-2 border-b border-gray-200">
-        <div className="min-w-0 flex items-center gap-3 pl-1 text-sm text-gray-600">
-          <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
-            <Users size={16} className="text-gray-400 shrink-0" />
-            <span>
-              <span className="font-semibold text-gray-800">{total}</span>
-              <span className="hidden sm:inline"> colaborador{total === 1 ? '' : 'es'}</span>
+    <div
+      ref={areaRef}
+      className={`org-area flex-1 min-h-[320px] rounded-xl border border-gray-200 ${arrastando ? 'arrastando' : ''}`}
+      onPointerDown={aoPressionar}
+      onPointerMove={aoMover}
+      onPointerUp={aoSoltar}
+      onPointerCancel={encerrarArrasto}
+      onClickCapture={aoClicar}
+    >
+      {/* Ocupa no mínimo a área toda e centraliza a árvore quando ela é menor. */}
+      <div className="min-w-full w-max p-6 select-none flex flex-col items-center gap-14">
+        <ul className="org-arvore" aria-label="Organograma">
+          <NoArvore no={principal} idDestaque={principal.id} onAbrir={onAbrir} />
+        </ul>
+
+        {semGestor.length > 0 && (
+          <div className="flex flex-col items-center gap-5">
+            <span className="px-3 py-1 rounded-full border border-gray-200 bg-white text-xs font-medium text-gray-500">
+              Sem gestor definido · {semGestor.length}
             </span>
-          </span>
-          <span className="hidden lg:inline-flex items-center gap-1.5 text-xs text-gray-400 whitespace-nowrap">
-            <Move size={14} />
-            Arraste para navegar · Ctrl + roda para zoom
-          </span>
-        </div>
-
-        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
-          <BotaoFerramenta
-            rotulo={tudoAberto ? 'Recolher ramos' : 'Expandir todos os ramos'}
-            onClick={alternarTudo}
-            className="px-2"
-          >
-            {tudoAberto ? <ChevronsDownUp size={16} /> : <ChevronsUpDown size={16} />}
-            <span className="hidden md:inline">{tudoAberto ? 'Recolher' : 'Expandir tudo'}</span>
-          </BotaoFerramenta>
-
-          <div className="flex items-center rounded-lg border border-gray-200">
-            <BotaoFerramenta
-              rotulo="Diminuir zoom"
-              onClick={() => mudarZoom(Math.round((zoom - PASSO_ZOOM) * 10) / 10)}
-              disabled={zoom <= ZOOM_MINIMO}
-              className="w-8 rounded-r-none"
-            >
-              <Minus size={16} />
-            </BotaoFerramenta>
-            <BotaoFerramenta
-              rotulo="Voltar para 100%"
-              onClick={() => mudarZoom(1)}
-              className="w-12 rounded-none text-xs font-medium tabular-nums"
-            >
-              {porcentagem}%
-            </BotaoFerramenta>
-            <BotaoFerramenta
-              rotulo="Aumentar zoom"
-              onClick={() => mudarZoom(Math.round((zoom + PASSO_ZOOM) * 10) / 10)}
-              disabled={zoom >= ZOOM_MAXIMO}
-              className="w-8 rounded-l-none"
-            >
-              <Plus size={16} />
-            </BotaoFerramenta>
-          </div>
-
-          <BotaoFerramenta rotulo="Ajustar à tela" onClick={ajustarATela} className="px-2">
-            <Scan size={16} />
-            <span className="hidden md:inline">Ajustar</span>
-          </BotaoFerramenta>
-        </div>
-      </div>
-
-      {/* Área da árvore: a única com rolagem nesta tela */}
-      <div
-        ref={areaRef}
-        className={`org-area flex-1 min-h-0 ${arrastando ? 'arrastando' : ''}`}
-        onPointerDown={aoPressionar}
-        onPointerMove={aoMover}
-        onPointerUp={aoSoltar}
-        onPointerCancel={encerrarArrasto}
-        onClickCapture={aoClicar}
-      >
-        {/* Ocupa no mínimo a área toda e centraliza a árvore quando ela é menor. */}
-        <div className="min-w-full w-max flex flex-col items-center" style={{ padding: MARGEM_AREA }}>
-          <div ref={conteudoRef} className="select-none flex flex-col items-center gap-14" style={{ zoom }}>
-            <ul className="org-arvore" aria-label="Organograma">
-              <NoArvore
-                no={principal}
-                abertos={abertos}
-                idDestaque={principal.id}
-                onAbrir={onAbrir}
-                onAlternar={alternarRamo}
-              />
+            <ul className="org-arvore items-start" aria-label="Colaboradores sem gestor definido">
+              {semGestor.map((raiz) => (
+                <NoArvore key={raiz.id} no={raiz} idDestaque={principal.id} onAbrir={onAbrir} />
+              ))}
             </ul>
-
-            {semGestor.length > 0 && (
-              <div className="flex flex-col items-center gap-5">
-                <span className="px-3 py-1 rounded-full border border-gray-200 bg-white text-xs font-medium text-gray-500">
-                  Sem gestor definido · {semGestor.length}
-                </span>
-                <ul className="org-arvore items-start" aria-label="Colaboradores sem gestor definido">
-                  {semGestor.map((raiz) => (
-                    <NoArvore
-                      key={raiz.id}
-                      no={raiz}
-                      abertos={abertos}
-                      idDestaque={principal.id}
-                      onAbrir={onAbrir}
-                      onAlternar={alternarRamo}
-                    />
-                  ))}
-                </ul>
-              </div>
-            )}
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
@@ -876,35 +556,11 @@ export function Organogram() {
     [funcionarios]
   );
 
-  const { porId, padraoAbertos, comSubordinados } = useMemo(() => {
-    const porId = new Map<number, NoOrganograma>();
-    const padraoAbertos = new Set<number>();
-    const comSubordinados: number[] = [];
-    percorrer(raizes, (no, nivel) => {
-      porId.set(no.id, no);
-      if (no.subordinados.length === 0) return;
-      comSubordinados.push(no.id);
-      if (nivel < NIVEIS_ABERTOS) padraoAbertos.add(no.id);
-    });
-    return { porId, padraoAbertos, comSubordinados };
+  const porId = useMemo(() => {
+    const mapa = new Map<number, NoOrganograma>();
+    percorrer(raizes, (no) => mapa.set(no.id, no));
+    return mapa;
   }, [raizes]);
-
-  // null = ramos no padrão (primeiros níveis abertos); vira um conjunto
-  // próprio assim que a pessoa abre ou fecha algum ramo.
-  const [abertosEscolhidos, setAbertosEscolhidos] = useState<Set<number> | null>(null);
-  const abertos = abertosEscolhidos ?? padraoAbertos;
-  const tudoAberto = comSubordinados.every((id) => abertos.has(id));
-
-  function alternarRamo(id: number) {
-    const proximo = new Set(abertos);
-    if (proximo.has(id)) proximo.delete(id);
-    else proximo.add(id);
-    setAbertosEscolhidos(proximo);
-  }
-
-  function alternarTudo() {
-    setAbertosEscolhidos(tudoAberto ? null : new Set(comSubordinados));
-  }
 
   const [selecionadoId, setSelecionadoId] = useState<number | null>(null);
   const selecionado = selecionadoId !== null ? porId.get(selecionadoId) : undefined;
@@ -915,7 +571,10 @@ export function Organogram() {
     <div className="w-full h-full flex flex-col">
       <div className="mb-4 sm:mb-6 shrink-0">
         <h1 className="m-0 text-2xl sm:text-3xl lg:text-[32px] text-gray-800 font-semibold">Organograma</h1>
-        <p className="mt-1 text-sm sm:text-base text-gray-500">Estrutura organizacional da empresa</p>
+        <p className="mt-1 text-sm sm:text-base text-gray-500">
+          Estrutura organizacional da empresa
+          {!carregando && !erro && funcionarios.length > 0 && ` · ${funcionarios.length} colaboradores`}
+        </p>
       </div>
 
       {carregando && (
@@ -934,15 +593,7 @@ export function Organogram() {
       )}
 
       {!carregando && !erro && raizes.length > 0 && (
-        <VisualizacaoOrganograma
-          raizes={raizes}
-          total={funcionarios.length}
-          abertos={abertos}
-          tudoAberto={tudoAberto}
-          onAlternar={alternarRamo}
-          onAlternarTudo={alternarTudo}
-          onAbrir={(no) => setSelecionadoId(no.id)}
-        />
+        <VisualizacaoOrganograma raizes={raizes} onAbrir={(no) => setSelecionadoId(no.id)} />
       )}
 
       {selecionado && (
