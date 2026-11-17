@@ -200,23 +200,6 @@ export interface AusenciaRhDto {
   funcionarioId: number | null;
 }
 
-export enum TipoRegistroPonto {
-  Entrada = 0,
-  SaidaAlmoco = 1,
-  VoltaAlmoco = 2,
-  Saida = 3,
-}
-
-export interface RegistroPontoRhDto {
-  id: number;
-  tipo: TipoRegistroPonto;
-  // Instante em UTC (termina com "Z").
-  registradoEm: string;
-  usuarioId: number;
-  usuarioNome: string;
-  usuarioEmail: string;
-}
-
 // Candidatos de processos seletivos (RecrutamentoController).
 export enum StatusRecrutamento {
   EmProcesso = 0,

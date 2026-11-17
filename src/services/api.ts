@@ -18,7 +18,6 @@ import type {
   FuncionarioUpdateDto,
   PromocaoDto,
   RecrutamentoDto,
-  RegistroPontoRhDto,
   StatusAusencia,
   UsuarioDto,
 } from '../types/api';
@@ -163,10 +162,6 @@ export const api = {
 
   atualizarStatusAusencia: (token: string, id: number, status: StatusAusencia) =>
     request<AusenciaRhDto | undefined>(`/api/rh/ausencias/${id}/status`, { method: 'PUT', body: { status }, token }),
-
-  /** `data` no formato YYYY-MM-DD; sem ela o backend usa o dia de hoje (Brasília). */
-  listarPontoRh: (token: string, data?: string) =>
-    request<RegistroPontoRhDto[]>(`/api/rh/ponto${data ? `?data=${encodeURIComponent(data)}` : ''}`, { token }),
 
   listarRecrutamentos: (token: string) => request<RecrutamentoDto[]>('/api/recrutamento', { token }),
 };

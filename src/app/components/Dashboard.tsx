@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Users, Briefcase, ClipboardCheck, Clock, Loader2, type LucideIcon } from 'lucide-react';
+import { Users, Briefcase, ClipboardCheck, Loader2, type LucideIcon } from 'lucide-react';
 import '../styles/hr-system.css';
 import { useAuth } from '../context/AuthContext';
 import { api, ApiError } from '../../services/api';
@@ -10,15 +10,13 @@ import {
   type DepartamentoDto,
   type FuncionarioDto,
 } from '../../types/api';
-import { hojeEmBrasilia } from '../../utils/datas';
 
 interface Indicadores {
   candidatosEmProcesso: number | null;
   justificativasPendentes: number | null;
-  pontoHoje: number | null;
 }
 
-const INDICADORES_VAZIOS: Indicadores = { candidatosEmProcesso: null, justificativasPendentes: null, pontoHoje: null };
+const INDICADORES_VAZIOS: Indicadores = { candidatosEmProcesso: null, justificativasPendentes: null };
 
 function contar<T>(resultado: PromiseSettledResult<T[] | null>, contagem: (lista: T[]) => number): number | null {
   return resultado.status === 'fulfilled' && resultado.value ? contagem(resultado.value) : null;
@@ -78,12 +76,11 @@ export function Dashboard() {
       setCarregando(true);
       setErroCarga(null);
 
-      const [resDeps, resFunc, resRecrutamento, resAusencias, resPonto] = await Promise.allSettled([
+      const [resDeps, resFunc, resRecrutamento, resAusencias] = await Promise.allSettled([
         api.listarDepartamentos(t),
         api.listarFuncionarios(t),
         soRh(() => api.listarRecrutamentos(t)),
         soRh(() => api.listarAusenciasRh(t)),
-        soRh(() => api.listarPontoRh(t, hojeEmBrasilia())),
       ]);
       if (cancelado) return;
 
@@ -104,10 +101,9 @@ export function Dashboard() {
         justificativasPendentes: contar(resAusencias, (lista) =>
           lista.filter((a) => a.status === StatusAusencia.Enviada || a.status === StatusAusencia.EmAnalise).length
         ),
-        pontoHoje: contar(resPonto, (lista) => new Set(lista.map((r) => r.usuarioId)).size),
       });
 
-      const falhas = [resDeps, resFunc, resRecrutamento, resAusencias, resPonto]
+      const falhas = [resDeps, resFunc, resRecrutamento, resAusencias]
         .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
         .map((r) => r.reason)
         .filter((motivo) => !(motivo instanceof ApiError && motivo.status === 403));
@@ -153,7 +149,7 @@ export function Dashboard() {
       )}
 
       {/* Cards de Estatísticas */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-5 mb-6 sm:mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5 mb-6 sm:mb-8">
         <CardIndicador
           icone={Users}
           titulo="Total de Funcionários Ativos"
@@ -174,14 +170,6 @@ export function Dashboard() {
           titulo="Justificativas pendentes"
           valor={indicadores.justificativasPendentes}
           detalhe="Enviadas pelo app ou em análise"
-          carregando={carregando}
-        />
-        <CardIndicador
-          icone={Clock}
-          cor="#f59e0b"
-          titulo="Ponto registrado hoje"
-          valor={indicadores.pontoHoje}
-          detalhe="Colaboradores com ao menos uma batida"
           carregando={carregando}
         />
       </div>
