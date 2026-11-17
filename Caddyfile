@@ -1,0 +1,63 @@
+# Configuração do servidor do painel na Railway (Railpack + Caddy). É o
+# Caddyfile padrão do Railpack para sites Vite, com regras de cache:
+# sem elas o navegador reaproveitava o index.html antigo por horas depois de
+# um deploy e o usuário continuava vendo a versão anterior do painel.
+
+# global options
+{
+	admin off
+	persist_config off
+	auto_https off
+
+	log {
+		format json
+	}
+
+	servers {
+		trusted_proxies static private_ranges 100.0.0.0/8 # trust railway's proxy
+	}
+}
+
+# site block, listens on the $PORT environment variable, automatically assigned by railway
+:{$PORT:80} {
+	log {
+		format json
+	}
+
+	respond /health 200
+
+	# Security headers
+	header {
+		# Prevent some browsers from MIME-sniffing a response away from the declared Content-Type
+		X-Content-Type-Options "nosniff"
+		# Remove Server header
+		-Server
+	}
+
+	# index.html e as rotas do SPA: o navegador sempre confere se há versão
+	# nova (responde rápido com 304 quando não mudou).
+	@paginas not path /assets/*
+	header @paginas Cache-Control "no-cache"
+
+	# Os arquivos de /assets têm um hash no nome (index-XXXX.js), então um
+	# deploy novo gera nomes novos e eles podem ficar em cache à vontade.
+	header /assets/* Cache-Control "public, max-age=31536000, immutable"
+
+	# serve from the 'dist' folder (Vite builds into the 'dist' folder)
+	root * {{.DIST_DIR}}
+
+	# Handle static files
+	file_server {
+		hide .git
+		hide .env*
+	}
+
+	# Compression with more formats
+	encode {
+		gzip
+		zstd
+	}
+
+	# match against direct against HTML file matches, folder-level index.html, and optionally fallback to root index.html
+	try_files {path} {path}.html {path}/index.html{{if .IndexFallback}} /index.html{{end}}
+}
