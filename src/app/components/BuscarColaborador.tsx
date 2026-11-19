@@ -30,7 +30,7 @@ import {
 import { ListaColaboradores } from './ListaColaboradores';
 import { formatarMoeda } from '../../utils/moeda';
 import { formatarDataCalendario, formatarDataHoraBrasilia } from '../../utils/datas';
-import { iniciais } from '../../utils/funcionarios';
+import { filtrarFuncionarios, iniciais } from '../../utils/funcionarios';
 
 type FiltroSituacao = 'ativos' | 'desligados' | 'todos';
 
@@ -66,7 +66,8 @@ const VISUAL_AJUSTE: Record<TipoAjusteRemuneracao, { label: string; icone: Lucid
   [TipoAjusteRemuneracao.Promocao]: { label: 'Promoção', icone: TrendingUp },
 };
 
-// Quantos ajustes mostrar no painel (a API já devolve os mais recentes primeiro).
+// Quantos ajustes mostrar de início (a API já devolve os mais recentes
+// primeiro); "Ver todos" abre o restante.
 const LIMITE_AJUSTES = 5;
 
 function LinhaDetalhe({ icone: Icone, rotulo, children }: { icone: LucideIcon; rotulo: string; children: ReactNode }) {
@@ -75,7 +76,10 @@ function LinhaDetalhe({ icone: Icone, rotulo, children }: { icone: LucideIcon; r
       <Icone className="w-4 h-4 mt-0.5 text-muted-foreground shrink-0" />
       <div className="min-w-0 flex-1 sm:flex sm:justify-between sm:gap-3">
         <span className="block text-sm text-muted-foreground shrink-0">{rotulo}</span>
-        <span className="block text-sm font-medium break-words sm:text-right">{children}</span>
+        {/* min-w-0 + overflow-wrap:anywhere: um valor longo sem espaço quebra dentro do card. */}
+        <span className="block min-w-0 text-sm font-medium break-words [overflow-wrap:anywhere] sm:text-right">
+          {children}
+        </span>
       </div>
     </div>
   );
@@ -89,7 +93,7 @@ function ItemAjuste({ ajuste }: { ajuste: AjusteRemuneracaoDto }) {
     ajuste.departamentoNovoNome && ajuste.departamentoNovoNome !== ajuste.departamentoAnteriorNome;
 
   return (
-    <li className="p-3 rounded-lg border border-border bg-accent/20">
+    <li className="p-3 rounded-lg border border-border bg-accent/20 min-w-0">
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mb-1">
         <span className="inline-flex items-center gap-1.5 text-sm font-medium">
           <Icone className="w-4 h-4 text-primary" />
@@ -118,10 +122,12 @@ function ItemAjuste({ ajuste }: { ajuste: AjusteRemuneracaoDto }) {
       )}
 
       {ajuste.motivo?.trim() && (
-        <p className="m-0 mt-2 text-sm text-gray-700 whitespace-pre-line break-words">{ajuste.motivo}</p>
+        <p className="m-0 mt-2 text-sm text-gray-700 whitespace-pre-line break-words [overflow-wrap:anywhere]">
+          {ajuste.motivo}
+        </p>
       )}
 
-      <p className="m-0 mt-2 text-xs text-muted-foreground">
+      <p className="m-0 mt-2 min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
         Registrado em {formatarDataHoraBrasilia(ajuste.criadoEm)}
         {ajuste.responsavelNome ? ` por ${ajuste.responsavelNome}` : ''}
       </p>
@@ -134,11 +140,16 @@ export function BuscarColaborador() {
   const { funcionarios, carregando, erro, recarregar } = useFuncionarios();
   const [situacao, setSituacao] = useState<FiltroSituacao>('ativos');
   const [departamentoId, setDepartamentoId] = useState('');
+  const [busca, setBusca] = useState('');
   const [selecionadoId, setSelecionadoId] = useState<number | null>(null);
 
   const [ajustes, setAjustes] = useState<AjusteRemuneracaoDto[]>([]);
   const [carregandoAjustes, setCarregandoAjustes] = useState(false);
   const [erroAjustes, setErroAjustes] = useState<string | null>(null);
+  const [mostrarTodosAjustes, setMostrarTodosAjustes] = useState(false);
+  // Sobe a cada "Atualizar", para o histórico do colaborador aberto ser relido
+  // junto com a lista (antes o salário mudava e o histórico ficava velho).
+  const [versaoHistorico, setVersaoHistorico] = useState(0);
 
   const painelRef = useRef<HTMLDivElement>(null);
 
@@ -151,10 +162,22 @@ export function BuscarColaborador() {
       .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
   }, [funcionarios]);
 
+  // Se o departamento escolhido sumiu da lista (ex.: o último colaborador dele
+  // mudou de área e a lista foi atualizada), o filtro volta para "Todos". Sem
+  // isso, o select mostrava "Todos" mas a lista continuava filtrada e vazia.
+  const departamentoExiste = !departamentoId || departamentos.some((d) => String(d.id) === departamentoId);
+  const departamentoFiltro = departamentoExiste ? departamentoId : '';
+  useEffect(() => {
+    if (!carregando && !departamentoExiste) setDepartamentoId('');
+  }, [carregando, departamentoExiste]);
+
   const doDepartamento = useMemo(
-    () => (departamentoId ? funcionarios.filter((f) => String(f.departamentoId) === departamentoId) : funcionarios),
-    [funcionarios, departamentoId]
+    () =>
+      departamentoFiltro ? funcionarios.filter((f) => String(f.departamentoId) === departamentoFiltro) : funcionarios,
+    [funcionarios, departamentoFiltro]
   );
+  // Os contadores de Ativos/Desligados/Todos consideram também o texto da busca.
+  const doDepartamentoComBusca = useMemo(() => filtrarFuncionarios(doDepartamento, busca), [doDepartamento, busca]);
 
   const filtroAtual = FILTROS_SITUACAO.find((f) => f.id === situacao) ?? FILTROS_SITUACAO[0];
   const visiveis = useMemo(() => doDepartamento.filter(filtroAtual.inclui), [doDepartamento, filtroAtual]);
@@ -170,16 +193,17 @@ export function BuscarColaborador() {
       return;
     }
 
-    // Se outro colaborador for escolhido antes da resposta chegar, ela é descartada.
+    // Se outro colaborador for escolhido antes da resposta chegar (ou a tela
+    // for fechada), o GET é cancelado e a resposta descartada.
     let cancelado = false;
-    setAjustes([]);
+    const controle = new AbortController();
     setCarregandoAjustes(true);
     setErroAjustes(null);
 
     api
-      .listarAjustesRemuneracao(token, selecionadoId)
+      .listarAjustesRemuneracao(token, selecionadoId, controle.signal)
       .then((lista) => {
-        if (!cancelado) setAjustes(lista);
+        if (!cancelado) setAjustes(Array.isArray(lista) ? lista : []);
       })
       .catch((e) => {
         if (cancelado) return;
@@ -191,10 +215,17 @@ export function BuscarColaborador() {
 
     return () => {
       cancelado = true;
+      controle.abort();
     };
-  }, [token, selecionadoId]);
+  }, [token, selecionadoId, versaoHistorico]);
 
   function handleSelecionar(funcionario: FuncionarioDto) {
+    if (funcionario.id !== selecionadoId) {
+      // Outro colaborador: o histórico começa vazio e recolhido. Num
+      // "Atualizar" do mesmo colaborador, ele continua como estava.
+      setAjustes([]);
+      setMostrarTodosAjustes(false);
+    }
     setSelecionadoId(funcionario.id);
     // No celular os detalhes ficam abaixo da lista: leva a tela até eles.
     if (window.matchMedia('(max-width: 1023px)').matches) {
@@ -202,7 +233,7 @@ export function BuscarColaborador() {
     }
   }
 
-  const mensagemVazia = departamentoId
+  const mensagemVazia = departamentoFiltro
     ? `Nenhum colaborador ${situacao === 'ativos' ? 'ativo ' : situacao === 'desligados' ? 'desligado ' : ''}neste departamento.`
     : filtroAtual.vazio;
 
@@ -221,7 +252,10 @@ export function BuscarColaborador() {
           </p>
         </div>
         <button
-          onClick={recarregar}
+          onClick={() => {
+            recarregar();
+            setVersaoHistorico((v) => v + 1);
+          }}
           disabled={carregando}
           className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-60 w-full sm:w-auto shrink-0"
         >
@@ -241,6 +275,8 @@ export function BuscarColaborador() {
           selecionadoId={selecionadoId}
           onSelecionar={handleSelecionar}
           mensagemVazia={mensagemVazia}
+          busca={busca}
+          onBuscaChange={setBusca}
           filtros={
             <div className="space-y-3">
               <div className="flex rounded-lg border border-border overflow-hidden" role="group" aria-label="Situação">
@@ -257,16 +293,18 @@ export function BuscarColaborador() {
                       }`}
                     >
                       {f.label}{' '}
-                      <span className="opacity-75 whitespace-nowrap">({doDepartamento.filter(f.inclui).length})</span>
+                      <span className="opacity-75 whitespace-nowrap">
+                        ({doDepartamentoComBusca.filter(f.inclui).length})
+                      </span>
                     </button>
                   );
                 })}
               </div>
               <select
-                value={departamentoId}
+                value={departamentoFiltro}
                 onChange={(e) => setDepartamentoId(e.target.value)}
-                aria-label="Departamento"
-                className="w-full px-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                aria-label="Filtrar por departamento"
+                className="w-full min-w-0 px-3 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary truncate"
               >
                 <option value="">Todos os departamentos</option>
                 {departamentos.map((d) => (
@@ -280,18 +318,24 @@ export function BuscarColaborador() {
           renderItem={(funcionario) => (
             <>
               <div className="flex items-start justify-between gap-2 mb-1">
-                <h3 className="font-medium break-words min-w-0">{funcionario.nome}</h3>
+                <h3 className="font-medium break-words [overflow-wrap:anywhere] min-w-0">{funcionario.nome}</h3>
                 {funcionario.status !== StatusFuncionario.Ativo && (
                   <span className="shrink-0 text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">Desligado</span>
                 )}
               </div>
               <p className="text-sm text-muted-foreground mb-2 break-all">{funcionario.email ?? 'Sem e-mail'}</p>
               <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
-                <div className="flex gap-2 flex-wrap">
-                  <span className="text-xs px-2 py-1 bg-accent rounded-full">{funcionario.departamentoNome}</span>
-                  <span className="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded-full">{funcionario.cargoNome}</span>
+                {/* Chips com overflow-wrap:anywhere: um nome de departamento ou cargo sem
+                    espaço não empurra o salário para fora do card. */}
+                <div className="flex gap-2 flex-wrap min-w-0">
+                  <span className="text-xs px-2 py-1 bg-accent rounded-full max-w-full [overflow-wrap:anywhere]">
+                    {funcionario.departamentoNome}
+                  </span>
+                  <span className="text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded-full max-w-full [overflow-wrap:anywhere]">
+                    {funcionario.cargoNome}
+                  </span>
                 </div>
-                <span className="text-sm font-medium text-primary whitespace-nowrap">
+                <span className="text-sm font-medium text-primary whitespace-nowrap shrink-0">
                   {formatarMoeda(funcionario.salario)}
                 </span>
               </div>
@@ -300,7 +344,7 @@ export function BuscarColaborador() {
         />
 
         {/* Detalhes */}
-        <div ref={painelRef} className="hr-card p-4 sm:p-6 scroll-mt-4">
+        <div ref={painelRef} className="hr-card p-4 sm:p-6 scroll-mt-4 min-w-0">
           <h2 className="text-xl mb-4">Detalhes do Colaborador</h2>
 
           {selecionado ? (
@@ -314,8 +358,10 @@ export function BuscarColaborador() {
                   {iniciais(selecionado.nome)}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <h3 className="font-medium break-words">{selecionado.nome}</h3>
-                  <p className="text-sm text-muted-foreground break-words">{selecionado.cargoNome}</p>
+                  <h3 className="font-medium break-words [overflow-wrap:anywhere]">{selecionado.nome}</h3>
+                  <p className="text-sm text-muted-foreground break-words [overflow-wrap:anywhere]">
+                    {selecionado.cargoNome}
+                  </p>
                 </div>
                 <span
                   className={`self-start shrink-0 inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${
@@ -366,7 +412,7 @@ export function BuscarColaborador() {
               <div>
                 <h3 className="font-medium mb-3 flex items-center gap-2">
                   <History className="w-4 h-4 text-muted-foreground" />
-                  Últimos ajustes de remuneração
+                  {mostrarTodosAjustes ? 'Histórico de remuneração' : 'Últimos ajustes de remuneração'}
                 </h3>
 
                 {carregandoAjustes ? (
@@ -383,14 +429,26 @@ export function BuscarColaborador() {
                 ) : (
                   <>
                     <ul className="m-0 p-0 list-none space-y-2">
-                      {ajustes.slice(0, LIMITE_AJUSTES).map((ajuste) => (
+                      {(mostrarTodosAjustes ? ajustes : ajustes.slice(0, LIMITE_AJUSTES)).map((ajuste) => (
                         <ItemAjuste key={ajuste.id} ajuste={ajuste} />
                       ))}
                     </ul>
                     {ajustes.length > LIMITE_AJUSTES && (
-                      <p className="m-0 mt-2 text-xs text-muted-foreground">
-                        Mostrando os {LIMITE_AJUSTES} mais recentes de {ajustes.length} ajustes.
-                      </p>
+                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                        <p className="m-0 text-xs text-muted-foreground">
+                          {mostrarTodosAjustes
+                            ? `Mostrando todos os ${ajustes.length} ajustes.`
+                            : `Mostrando os ${LIMITE_AJUSTES} mais recentes de ${ajustes.length} ajustes.`}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setMostrarTodosAjustes((v) => !v)}
+                          aria-expanded={mostrarTodosAjustes}
+                          className="text-sm font-medium text-primary hover:underline"
+                        >
+                          {mostrarTodosAjustes ? 'Mostrar só os mais recentes' : `Ver todos (${ajustes.length})`}
+                        </button>
+                      </div>
                     )}
                   </>
                 )}

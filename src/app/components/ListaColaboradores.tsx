@@ -2,6 +2,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { Search, Loader2, RefreshCw, Users } from 'lucide-react';
 import type { FuncionarioDto } from '../../types/api';
 import { contarColaboradores, filtrarFuncionarios, ordenarPorNome } from '../../utils/funcionarios';
+import { limparTexto } from '../../utils/validacao';
 
 interface ListaColaboradoresProps {
   funcionarios: FuncionarioDto[];
@@ -16,6 +17,12 @@ interface ListaColaboradoresProps {
   /** Controles extras (ex. filtros) mostrados logo abaixo da busca. */
   filtros?: ReactNode;
   mensagemVazia?: string;
+  /**
+   * Texto da busca, quando quem usa a lista precisa dele (ex. para contar os
+   * resultados nos filtros). Sem essas duas props, a lista guarda a busca sozinha.
+   */
+  busca?: string;
+  onBuscaChange?: (busca: string) => void;
 }
 
 /**
@@ -33,13 +40,19 @@ export function ListaColaboradores({
   titulo = 'Buscar Colaborador',
   filtros,
   mensagemVazia = 'Nenhum colaborador cadastrado.',
+  busca: buscaControlada,
+  onBuscaChange,
 }: ListaColaboradoresProps) {
-  const [busca, setBusca] = useState('');
+  const [buscaInterna, setBuscaInterna] = useState('');
+  const busca = buscaControlada ?? buscaInterna;
+  const setBusca = onBuscaChange ?? setBuscaInterna;
+  const buscaExibida = limparTexto(busca);
 
   const visiveis = useMemo(() => ordenarPorNome(filtrarFuncionarios(funcionarios, busca)), [funcionarios, busca]);
 
   return (
-    <div className="hr-card p-4 sm:p-6">
+    // min-w-0: como item de grid, o card não pode crescer com um texto longo sem espaço.
+    <div className="hr-card p-4 sm:p-6 min-w-0">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 mb-4">
         <h2 className="text-xl">{titulo}</h2>
         {!carregando && !erro && (
@@ -53,7 +66,9 @@ export function ListaColaboradores({
           type="text"
           value={busca}
           onChange={(e) => setBusca(e.target.value)}
-          placeholder="Buscar por nome, e-mail, departamento ou cargo..."
+          placeholder="Buscar por nome, e-mail, CPF, departamento ou cargo..."
+          aria-label="Buscar colaborador por nome, e-mail, CPF, departamento ou cargo"
+          maxLength={200}
           className="w-full pl-10 pr-4 py-3 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
         />
       </div>
@@ -80,8 +95,8 @@ export function ListaColaboradores({
         ) : visiveis.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-muted-foreground text-center">
             <Users className="w-10 h-10 mb-3 opacity-50" />
-            <p className="m-0 text-sm">
-              {busca.trim() ? `Nenhum colaborador encontrado para "${busca.trim()}".` : mensagemVazia}
+            <p className="m-0 text-sm max-w-full [overflow-wrap:anywhere]">
+              {buscaExibida ? `Nenhum colaborador encontrado para "${buscaExibida}".` : mensagemVazia}
             </p>
           </div>
         ) : (
@@ -90,7 +105,7 @@ export function ListaColaboradores({
               <button
                 key={funcionario.id}
                 onClick={() => onSelecionar(funcionario)}
-                className={`w-full p-3 sm:p-4 rounded-lg border transition-all text-left ${
+                className={`w-full min-w-0 p-3 sm:p-4 rounded-lg border transition-all text-left ${
                   selecionadoId === funcionario.id
                     ? 'border-primary bg-primary/5'
                     : 'border-border bg-accent/30 hover:bg-accent/50'

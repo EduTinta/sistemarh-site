@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { Loader2, Mail, Lock, Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -8,15 +8,21 @@ export function Login() {
   const [senha, setSenha] = useState('');
   const [mostrarSenha, setMostrarSenha] = useState(false);
   const [carregando, setCarregando] = useState(false);
+  // Trava síncrona: o `disabled` do botão só vale depois do próximo render,
+  // então dois envios no mesmo instante (script, requestSubmit) passavam.
+  const enviandoRef = useRef(false);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    if (enviandoRef.current) return;
+    enviandoRef.current = true;
     setCarregando(true);
     try {
       await login(email, senha);
     } catch {
       // erroLogin já guarda a mensagem — só evita que o erro suba sem tratamento.
     } finally {
+      enviandoRef.current = false;
       setCarregando(false);
     }
   }
@@ -43,9 +49,12 @@ export function Login() {
 
         <form onSubmit={handleSubmit} className="bg-white rounded-b-2xl shadow-xl px-6 py-6 -mt-8 relative space-y-4">
           {erroLogin && (
-            <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-red-50 border border-red-200 text-red-600 text-sm">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              <span>{erroLogin}</span>
+            <div
+              role="alert"
+              className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-red-50 border border-red-200 text-red-600 text-sm"
+            >
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
+              <span className="min-w-0 [overflow-wrap:anywhere]">{erroLogin}</span>
             </div>
           )}
 
@@ -54,11 +63,13 @@ export function Login() {
               E-mail
             </label>
             <div className="relative mt-1.5">
-              <Mail className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <Mail className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" aria-hidden="true" />
               <input
                 id="email"
                 type="email"
                 required
+                maxLength={254}
+                autoComplete="username"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="seu.email@empresa.com"
@@ -72,11 +83,13 @@ export function Login() {
               Senha
             </label>
             <div className="relative mt-1.5">
-              <Lock className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <Lock className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" aria-hidden="true" />
               <input
                 id="senha"
                 type={mostrarSenha ? 'text' : 'password'}
                 required
+                maxLength={256}
+                autoComplete="current-password"
                 value={senha}
                 onChange={(e) => setSenha(e.target.value)}
                 placeholder="••••••••"

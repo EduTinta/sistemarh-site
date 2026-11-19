@@ -30,6 +30,11 @@
 	header {
 		# Prevent some browsers from MIME-sniffing a response away from the declared Content-Type
 		X-Content-Type-Options "nosniff"
+		# O painel não deve ser aberto dentro de um <iframe> de outro site
+		# (evita clickjacking em botões como "Desligar colaborador").
+		X-Frame-Options "DENY"
+		# Não manda o endereço do painel no cabeçalho Referer para outros sites.
+		Referrer-Policy "no-referrer"
 		# Remove Server header
 		-Server
 	}

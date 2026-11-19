@@ -18,15 +18,24 @@ export function useFuncionarios() {
   useEffect(() => {
     if (!token) return;
 
-    // Evita que uma resposta antiga sobrescreva a de um recarregamento mais novo.
+    // Evita que uma resposta antiga sobrescreva a de um recarregamento mais
+    // novo e cancela o GET se a pessoa sair da tela antes da resposta.
     let cancelado = false;
+    const controle = new AbortController();
     setCarregando(true);
     setErro(null);
 
     api
-      .listarFuncionarios(token)
+      .listarFuncionarios(token, controle.signal)
       .then((lista) => {
-        if (!cancelado) setFuncionarios(lista);
+        if (cancelado) return;
+        // Uma resposta fora do formato (página de proxy, objeto) não pode
+        // derrubar a tela inteira com "x.filter is not a function".
+        if (!Array.isArray(lista)) {
+          setErro('O servidor devolveu uma resposta inesperada. Tente novamente.');
+          return;
+        }
+        setFuncionarios(lista);
       })
       .catch((e) => {
         if (cancelado) return;
@@ -38,6 +47,7 @@ export function useFuncionarios() {
 
     return () => {
       cancelado = true;
+      controle.abort();
     };
   }, [token, versao]);
 

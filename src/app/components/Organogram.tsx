@@ -10,21 +10,20 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import '../styles/hr-system.css';
-import { api, ApiError } from '../../services/api';
+import { api, ApiError, ehConflito } from '../../services/api';
 import { useAuth } from '../context/AuthContext';
-import type { FuncionarioDto } from '../../types/api';
+import { useAvisos } from '../context/AvisosContext';
+import type { DesligamentoResultadoDto, FuncionarioDto } from '../../types/api';
 import { StatusFuncionario } from '../../types/api';
+import { contarColaboradores, iniciais, normalizarBusca } from '../../utils/funcionarios';
+import { dataIso } from '../../utils/datas';
+import { SENHA_APP_MAXIMO, SENHA_APP_MINIMO, validarSenhaApp } from '../../utils/validacao';
 
 interface NoOrganograma extends FuncionarioDto {
   subordinados: NoOrganograma[];
 }
 
-function iniciais(nome: string): string {
-  const partes = nome.trim().split(/\s+/).filter(Boolean);
-  if (partes.length === 0) return '?';
-  if (partes.length === 1) return partes[0].slice(0, 1).toUpperCase();
-  return (partes[0].slice(0, 1) + partes[partes.length - 1].slice(0, 1)).toUpperCase();
-}
+const MENSAGEM_RESPOSTA_INESPERADA = 'O servidor devolveu uma resposta inesperada. Tente novamente.';
 
 /** Monta a árvore do organograma a partir da lista plana de funcionários,
  * usando `gerenteId` pra decidir quem fica embaixo de quem. Quem não tem
@@ -45,9 +44,6 @@ function montarArvore(funcionarios: FuncionarioDto[]): NoOrganograma[] {
     }
   }
 
-  // Um ciclo de gestores (A → B → A) deixaria esses nós fora da árvore — e o
-  // card desenha os subordinados recursivamente. Quem não for alcançável a
-  // partir de uma raiz vira raiz também, separado do "gestor" do ciclo.
   const visitados = new Set<number>();
   const visitar = (no: NoOrganograma) => {
     if (visitados.has(no.id)) return;
@@ -56,12 +52,26 @@ function montarArvore(funcionarios: FuncionarioDto[]): NoOrganograma[] {
   };
   raizes.forEach(visitar);
 
+  // Quem sobrou está num ciclo de gestores (A → B → A) ou pendurado em alguém
+  // de um ciclo — e o card desenha os subordinados recursivamente. Sobe a
+  // cadeia de gestores até repetir alguém: esse está no ciclo, e o ciclo é
+  // cortado nele. Quem só está pendurado no ciclo continua embaixo do próprio
+  // gestor (antes ele virava uma raiz solta, longe do gestor ativo).
   for (const no of porId.values()) {
     if (visitados.has(no.id)) continue;
-    const gestor = no.gerenteId !== null ? porId.get(no.gerenteId) : undefined;
-    if (gestor) gestor.subordinados = gestor.subordinados.filter((s) => s.id !== no.id);
-    raizes.push(no);
-    visitar(no);
+    const vistosNaSubida = new Set<number>();
+    let atual = no;
+    while (!vistosNaSubida.has(atual.id)) {
+      vistosNaSubida.add(atual.id);
+      const gestor = atual.gerenteId !== null ? porId.get(atual.gerenteId) : undefined;
+      if (!gestor) break;
+      atual = gestor;
+    }
+    const noDoCorte = atual;
+    const gestorDoCorte = noDoCorte.gerenteId !== null ? porId.get(noDoCorte.gerenteId) : undefined;
+    if (gestorDoCorte) gestorDoCorte.subordinados = gestorDoCorte.subordinados.filter((s) => s.id !== noDoCorte.id);
+    raizes.push(noDoCorte);
+    visitar(noDoCorte);
   }
 
   return raizes;
@@ -69,6 +79,79 @@ function montarArvore(funcionarios: FuncionarioDto[]): NoOrganograma[] {
 
 function tamanhoEquipe(no: NoOrganograma): number {
   return no.subordinados.reduce((total, sub) => total + 1 + tamanhoEquipe(sub), 0);
+}
+
+// "Diretoria", "Diretoria Executiva", "Presidência"...
+function ehDiretoria(nomeDepartamento: string): boolean {
+  return /diretori|presiden/.test(normalizarBusca(nomeDepartamento));
+}
+
+// "CEO", "Presidente" (não "Vice-presidente"), "Diretor(a) Geral",
+// "Diretor(a) Executivo(a)".
+function ehCargoDeTopo(cargo: string | null | undefined): boolean {
+  return /\bceo\b|(?<!vice[\s-]?)presidente|diretora?[\s-]+(geral|executiv)|chief executive/.test(normalizarBusca(cargo ?? ''));
+}
+
+/**
+ * O topo da hierarquia vem primeiro. Entre as pessoas sem gestor da Diretoria
+ * (ou de um departamento de nome parecido), o critério é estável: primeiro
+ * o cargo de topo (CEO, Presidente, Diretor Geral/Executivo), depois a
+ * admissão mais antiga; o tamanho da equipe só desempata. Antes a equipe
+ * vinha primeiro, e um diretor novo sem gestor, com um ramo grande, tirava a
+ * CEO do topo. Sem ninguém na Diretoria, vale a raiz com a maior equipe. As
+ * outras raízes são quem ficou sem gestor (cadastro incompleto, gestor
+ * desligado, ciclo).
+ */
+function ordenarRaizes(raizes: NoOrganograma[]): NoOrganograma[] {
+  const tamanho = new Map(raizes.map((r) => [r.id, tamanhoEquipe(r)]));
+  const porEquipe = [...raizes].sort((a, b) => (tamanho.get(b.id) ?? 0) - (tamanho.get(a.id) ?? 0));
+  const [melhorDaDiretoria] = raizes
+    .filter((r) => r.gerenteId === null && ehDiretoria(r.departamentoNome))
+    .sort(
+      (a, b) =>
+        Number(ehCargoDeTopo(b.cargoNome)) - Number(ehCargoDeTopo(a.cargoNome)) ||
+        (dataIso(a.dataAdmissao) ?? '9999-12-31').localeCompare(dataIso(b.dataAdmissao) ?? '9999-12-31') ||
+        (tamanho.get(b.id) ?? 0) - (tamanho.get(a.id) ?? 0) ||
+        a.id - b.id
+    );
+  const topo = melhorDaDiretoria ?? porEquipe.find((r) => ehDiretoria(r.departamentoNome)) ?? porEquipe[0];
+  return topo ? [topo, ...porEquipe.filter((r) => r !== topo)] : [];
+}
+
+/** Se `inicio` está abaixo da pessoa `idTopo` na cadeia de gestores (ciclo). */
+function estaAbaixoDe(inicio: FuncionarioDto, idTopo: number, porId: Map<number, FuncionarioDto>): boolean {
+  const vistos = new Set<number>();
+  let atual: FuncionarioDto | undefined = inicio;
+  while (atual && !vistos.has(atual.id)) {
+    if (atual.id === idTopo) return true;
+    vistos.add(atual.id);
+    atual = atual.gerenteId !== null ? porId.get(atual.gerenteId) : undefined;
+  }
+  return false;
+}
+
+/**
+ * Pergunta antes de desligar, com a MESMA regra do backend: os subordinados
+ * diretos ativos (todos, e não só os desenhados embaixo do card, porque a
+ * árvore corta os ciclos) vão para o gestor de quem sai, se ele estiver
+ * ativo; senão ficam sem gestor. Com ciclo de gestores, o texto não promete
+ * nada: o resultado exato vem na resposta.
+ */
+function textoConfirmacaoDesligar(pessoa: FuncionarioDto, ativos: FuncionarioDto[]): string {
+  const final = 'Essa ação não pode ser desfeita pelo site.';
+  const diretos = ativos.filter((f) => f.gerenteId === pessoa.id && f.id !== pessoa.id).length;
+  if (diretos === 0) return `Desligar ${pessoa.nome}? ${final}`;
+
+  const porId = new Map(ativos.map((f) => [f.id, f]));
+  const quem = `${contarColaboradores(diretos)} que ${diretos === 1 ? 'reporta' : 'reportam'} diretamente a essa pessoa`;
+  const gestor = pessoa.gerenteId !== null && pessoa.gerenteId !== pessoa.id ? porId.get(pessoa.gerenteId) : undefined;
+  if (gestor && estaAbaixoDe(gestor, pessoa.id, porId)) {
+    return `Desligar ${pessoa.nome}? Os gestores dessa pessoa formam um ciclo na hierarquia. O sistema vai realocar ${quem} e mostrar o resultado logo depois. ${final}`;
+  }
+  const destino = gestor
+    ? `${diretos === 1 ? 'passa' : 'passam'} a reportar a ${gestor.nome}`
+    : `${diretos === 1 ? 'fica' : 'ficam'} sem gestor definido`;
+  return `Desligar ${pessoa.nome}? ${quem} ${destino}. ${final}`;
 }
 
 /** Percorre a árvore inteira, com o nível de cada nó (0 = raiz). */
@@ -80,8 +163,28 @@ function percorrer(raizes: NoOrganograma[], visitar: (no: NoOrganograma, nivel: 
   raizes.forEach((raiz) => descer(raiz, 0));
 }
 
+/** O que de fato aconteceu, a partir da resposta do backend. */
+function descreverDesligamento(nome: string, resultado: DesligamentoResultadoDto): string {
+  const quantidade = resultado.subordinadosRealocados ?? 0;
+  if (quantidade <= 0) return `${nome} foi desligado(a).`;
+  const quem =
+    quantidade === 1 ? '1 colaborador que reportava a essa pessoa' : `${quantidade} colaboradores que reportavam a essa pessoa`;
+  if (resultado.novoGestorNome) {
+    return `${nome} foi desligado(a). ${quem} ${quantidade === 1 ? 'passou' : 'passaram'} a reportar a ${resultado.novoGestorNome}.`;
+  }
+  return `${nome} foi desligado(a). ${quem} ${quantidade === 1 ? 'ficou' : 'ficaram'} sem gestor definido e ${
+    quantidade === 1 ? 'aparece' : 'aparecem'
+  } em "Sem gestor definido" no organograma.`;
+}
+
 // Quanto o mouse precisa andar pra virar "arrastar" em vez de clique.
 const LIMIAR_ARRASTO = 5;
+
+// Largura de cada árvore em "Sem gestor definido": o card (w-56 = 224px)
+// mais os 10px de cada lado do <li>.
+const LARGURA_CELULA = 244;
+// p-6 da área (24px de cada lado).
+const PADDING_AREA = 48;
 
 function CardColaborador({
   funcionario,
@@ -98,6 +201,7 @@ function CardColaborador({
       data-no={funcionario.id}
       onClick={onAbrir}
       title={`${funcionario.nome} — ${funcionario.cargoNome}`}
+      aria-haspopup="dialog"
       className="w-56 h-[72px] flex items-center gap-2.5 px-3 rounded-xl border border-gray-200 bg-white text-left shadow-sm cursor-pointer transition-[border-color,box-shadow] hover:border-primary/50 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
     >
       <span className="relative shrink-0">
@@ -105,6 +209,7 @@ function CardColaborador({
           className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold ${
             destaque ? 'bg-primary text-primary-foreground' : 'bg-accent text-accent-foreground'
           }`}
+          aria-hidden="true"
         >
           {iniciais(funcionario.nome)}
         </span>
@@ -113,7 +218,7 @@ function CardColaborador({
             title="Tem acesso ao app"
             className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full bg-emerald-500 text-white ring-2 ring-white flex items-center justify-center"
           >
-            <Smartphone size={9} strokeWidth={2.5} />
+            <Smartphone size={9} strokeWidth={2.5} aria-hidden="true" />
             <span className="sr-only">Tem acesso ao app</span>
           </span>
         )}
@@ -172,17 +277,36 @@ function VisualizacaoOrganograma({
 }) {
   const areaRef = useRef<HTMLDivElement>(null);
   const [principal, ...semGestor] = raizes;
+  const [larguraArea, setLarguraArea] = useState(0);
 
-  // Centraliza o card do topo da hierarquia ao abrir a tela.
+  // "Sem gestor definido" vira uma grade que quebra linha na largura visível
+  // da área (antes era uma fileira única com centenas de cards lado a lado).
   useLayoutEffect(() => {
+    const area = areaRef.current;
+    if (!area) return;
+    const medir = () => setLarguraArea(area.clientWidth);
+    medir();
+    const observador = new ResizeObserver(medir);
+    observador.observe(area);
+    return () => observador.disconnect();
+  }, []);
+
+  // Centraliza o card do topo da hierarquia ao abrir a tela (depois de medir
+  // a área, que define a largura da grade de baixo).
+  const centralizadoRef = useRef(false);
+  useLayoutEffect(() => {
+    if (centralizadoRef.current || larguraArea === 0) return;
     const area = areaRef.current;
     const card = area?.querySelector<HTMLElement>(`[data-no="${principal.id}"]`);
     if (!area || !card) return;
+    centralizadoRef.current = true;
     const a = area.getBoundingClientRect();
     const c = card.getBoundingClientRect();
     area.scrollLeft += c.left + c.width / 2 - (a.left + area.clientWidth / 2);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [larguraArea, principal.id]);
+
+  // O contador conta pessoas (a raiz e a equipe dela), não só as raízes.
+  const pessoasSemGestor = semGestor.reduce((total, raiz) => total + 1 + tamanhoEquipe(raiz), 0);
 
   // --- Arrastar para mover (mouse; no celular vale a rolagem por toque) ---
   const arrastoRef = useRef<{ id: number; x: number; y: number; left: number; top: number; movendo: boolean } | null>(
@@ -264,68 +388,165 @@ function VisualizacaoOrganograma({
         </ul>
 
         {semGestor.length > 0 && (
-          <div className="flex flex-col items-center gap-5">
+          <section
+            aria-label="Colaboradores sem gestor definido"
+            className="flex flex-col items-center gap-5"
+            // Largura fixa (a visível da área): sem ela a grade, dentro de um
+            // pai `w-max`, nunca quebraria a linha.
+            style={{ width: Math.max(larguraArea - PADDING_AREA, LARGURA_CELULA) }}
+          >
             <span className="px-3 py-1 rounded-full border border-gray-200 bg-white text-xs font-medium text-gray-500">
-              Sem gestor definido · {semGestor.length}
+              Sem gestor definido · {contarColaboradores(pessoasSemGestor)}
             </span>
-            <ul className="org-arvore items-start" aria-label="Colaboradores sem gestor definido">
+            {/* `safe center`: uma árvore mais larga que a área sobra só para a
+                direita (dá para rolar até ela); com `center` ela vazava para
+                os dois lados e o começo ficava fora do alcance. */}
+            <div className="w-full flex flex-wrap justify-center-safe items-start gap-x-4 gap-y-8">
               {semGestor.map((raiz) => (
-                <NoArvore key={raiz.id} no={raiz} idDestaque={principal.id} onAbrir={onAbrir} />
+                <ul key={raiz.id} className="org-arvore">
+                  <NoArvore no={raiz} idDestaque={principal.id} onAbrir={onAbrir} />
+                </ul>
               ))}
-            </ul>
-          </div>
+            </div>
+          </section>
         )}
       </div>
     </div>
   );
 }
 
-const TAMANHO_MINIMO_SENHA_APP = 6;
+// Controles que recebem foco por Tab dentro do modal.
+const SELETOR_FOCAVEIS =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /** Modal com os dados do colaborador e as ações de RH (acesso ao app e desligamento). */
 function DetalhesColaborador({
   funcionario,
+  desligando,
+  erroDesligar,
   onFechar,
-  onDesligado,
+  onDesligar,
+  onLimparErroDesligar,
   onAcessoAppAlterado,
 }: {
   funcionario: NoOrganograma;
+  /** Vem da tela (e não do modal): continua valendo se o modal for fechado e reaberto. */
+  desligando: boolean;
+  erroDesligar: string | null;
   onFechar: () => void;
-  onDesligado: () => void;
+  onDesligar: () => void;
+  /** Some com o erro de um desligamento anterior (vale para a tela toda). */
+  onLimparErroDesligar: () => void;
   onAcessoAppAlterado: () => void;
 }) {
   const { token, isRhOuAdmin } = useAuth();
-  const [desligando, setDesligando] = useState(false);
-  const [erroDesligar, setErroDesligar] = useState<string | null>(null);
+  const dialogoRef = useRef<HTMLDivElement>(null);
+  const erroDesligarRef = useRef<HTMLParagraphElement>(null);
+  const erroAcessoRef = useRef<HTMLParagraphElement>(null);
+  const idTitulo = `detalhes-colaborador-${funcionario.id}`;
 
   const [editandoAcessoApp, setEditandoAcessoApp] = useState(false);
   const [senhaApp, setSenhaApp] = useState('');
   const [salvandoAcessoApp, setSalvandoAcessoApp] = useState(false);
+  const salvandoAcessoRef = useRef(false);
   const [erroAcessoApp, setErroAcessoApp] = useState<string | null>(null);
   const [sucessoAcessoApp, setSucessoAcessoApp] = useState<string | null>(null);
   // Vale até a lista recarregada chegar com possuiAcessoApp atualizado.
   const [acessoAppCriado, setAcessoAppCriado] = useState(false);
   const possuiAcessoApp = funcionario.possuiAcessoApp || acessoAppCriado;
 
+  // O onFechar muda a cada render da tela; a ref evita reinstalar os
+  // listeners de teclado.
+  const onFecharRef = useRef(onFechar);
+  onFecharRef.current = onFechar;
+
+  // Diálogo modal de verdade: o foco entra nele, fica preso nele (Tab e
+  // Shift+Tab dão a volta) e Esc fecha. Antes o foco ficava no card de trás,
+  // e Tab+Enter trocava a pessoa mostrada — com risco de desligar a errada.
+  useEffect(() => {
+    const dialogo = dialogoRef.current;
+    if (!dialogo) return;
+    dialogo.focus();
+
+    const focaveis = () =>
+      Array.from(dialogo.querySelectorAll<HTMLElement>(SELETOR_FOCAVEIS)).filter((el) => el.getClientRects().length > 0);
+
+    function aoTeclar(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onFecharRef.current();
+        return;
+      }
+      if (e.key !== 'Tab' || !dialogo) return;
+      const lista = focaveis();
+      if (lista.length === 0) {
+        e.preventDefault();
+        dialogo.focus();
+        return;
+      }
+      const primeiro = lista[0];
+      const ultimo = lista[lista.length - 1];
+      const ativo = document.activeElement;
+      const foraDoDialogo = !ativo || !dialogo.contains(ativo) || ativo === dialogo;
+      if (e.shiftKey && (ativo === primeiro || foraDoDialogo)) {
+        e.preventDefault();
+        ultimo.focus();
+      } else if (!e.shiftKey && (ativo === ultimo || foraDoDialogo)) {
+        e.preventDefault();
+        primeiro.focus();
+      }
+    }
+
+    // Foco que escapar por outro caminho (leitor de tela, clique) volta ao diálogo.
+    function aoFocar(e: FocusEvent) {
+      if (dialogo && e.target instanceof Node && !dialogo.contains(e.target)) dialogo.focus();
+    }
+
+    document.addEventListener('keydown', aoTeclar);
+    document.addEventListener('focusin', aoFocar);
+    return () => {
+      document.removeEventListener('keydown', aoTeclar);
+      document.removeEventListener('focusin', aoFocar);
+    };
+  }, []);
+
+  // O botão clicado fica desabilitado durante a requisição, e o navegador
+  // tira o foco dele (vai para o BODY, fora do diálogo, sem disparar focusin).
+  // Quando a ação termina com o modal ainda aberto, o foco volta para dentro:
+  // na mensagem de erro, se houver, ou no próprio diálogo.
+  useEffect(() => {
+    const dialogo = dialogoRef.current;
+    if (!dialogo || desligando || salvandoAcessoApp) return;
+    const ativo = document.activeElement;
+    if (ativo && ativo !== document.body && dialogo.contains(ativo)) return;
+    (erroDesligarRef.current ?? erroAcessoRef.current ?? dialogo).focus();
+  }, [desligando, salvandoAcessoApp, erroDesligar, erroAcessoApp, sucessoAcessoApp]);
+
   async function handleSalvarAcessoApp(e: FormEvent) {
     e.preventDefault();
-    if (!token) return;
-    if (senhaApp.length < TAMANHO_MINIMO_SENHA_APP) {
-      setErroAcessoApp(`A senha precisa ter pelo menos ${TAMANHO_MINIMO_SENHA_APP} caracteres.`);
+    // Trava síncrona: o estado só vale no próximo render, e N envios no mesmo
+    // instante viravam N POSTs (cada um derruba as sessões do colaborador).
+    if (!token || salvandoAcessoRef.current) return;
+    const erroSenha = validarSenhaApp(senhaApp);
+    if (erroSenha) {
+      setErroAcessoApp(erroSenha);
       return;
     }
 
     const jaTinhaAcesso = possuiAcessoApp;
+    salvandoAcessoRef.current = true;
+    // Uma ação nova tira o erro da outra: antes os dois alertas ficavam juntos.
+    onLimparErroDesligar();
     setSalvandoAcessoApp(true);
     setErroAcessoApp(null);
     setSucessoAcessoApp(null);
     try {
       const atualizado = await api.definirAcessoApp(token, funcionario.id, senhaApp);
-      setAcessoAppCriado(atualizado.possuiAcessoApp ?? true);
+      setAcessoAppCriado(atualizado?.possuiAcessoApp ?? true);
       setSucessoAcessoApp(
         jaTinhaAcesso
-          ? 'Senha do app redefinida. Passe a nova senha para o colaborador.'
-          : `Acesso criado. ${funcionario.nome} já pode entrar no app com ${atualizado.email ?? funcionario.email}.`
+          ? 'Senha do app redefinida. As sessões abertas com a senha antiga foram encerradas; passe a nova senha para o colaborador.'
+          : `Acesso criado. ${funcionario.nome} já pode entrar no app com ${atualizado?.email ?? funcionario.email}.`
       );
       setEditandoAcessoApp(false);
       setSenhaApp('');
@@ -333,61 +554,38 @@ function DetalhesColaborador({
     } catch (erro) {
       setErroAcessoApp(erro instanceof ApiError ? erro.message : 'Não foi possível definir o acesso ao app.');
     } finally {
+      salvandoAcessoRef.current = false;
       setSalvandoAcessoApp(false);
-    }
-  }
-
-  async function handleDesligar() {
-    if (!token) return;
-
-    const temSubordinados = funcionario.subordinados.length > 0;
-    const aviso = temSubordinados
-      ? `Desligar ${funcionario.nome}? Os ${funcionario.subordinados.length} colaborador(es) que reportam a ela(e) passam a reportar direto ao gestor dela(e).`
-      : `Desligar ${funcionario.nome}? Essa ação não pode ser desfeita pelo site.`;
-    if (!window.confirm(aviso)) return;
-
-    setDesligando(true);
-    setErroDesligar(null);
-    try {
-      // Antes de desligar, sobe os subordinados diretos um nível na
-      // hierarquia (pro gestor de quem está saindo) — sem isso eles ficariam
-      // "perdidos", apontando pra um gestor desligado que some da árvore.
-      for (const sub of funcionario.subordinados) {
-        await api.atualizarFuncionario(token, sub.id, {
-          nome: sub.nome,
-          email: sub.email ?? undefined,
-          telefone: sub.telefone ?? undefined,
-          dataNascimento: sub.dataNascimento ?? undefined,
-          departamentoId: sub.departamentoId,
-          cargoId: sub.cargoId,
-          gerenteId: funcionario.gerenteId,
-        });
-      }
-
-      await api.desligarFuncionario(token, funcionario.id);
-      onDesligado();
-    } catch (e) {
-      setErroDesligar(e instanceof ApiError ? e.message : 'Não foi possível desligar o colaborador.');
-    } finally {
-      setDesligando(false);
     }
   }
 
   return (
     <div className="modal-fundo" onClick={onFechar}>
-      <div className="modal-conteudo" onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={dialogoRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={idTitulo}
+        tabIndex={-1}
+        className="modal-conteudo"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex justify-between items-center mb-5 gap-3">
-          <h2 className="m-0 text-xl sm:text-2xl text-gray-800 font-semibold break-words flex-1 min-w-0">
+          <h2
+            id={idTitulo}
+            className="m-0 text-xl sm:text-2xl text-gray-800 font-semibold flex-1 min-w-0 [overflow-wrap:anywhere]"
+          >
             {funcionario.nome}
           </h2>
-          <button className="botao-fechar shrink-0" onClick={onFechar} aria-label="Fechar">
-            <X size={20} />
+          <button type="button" className="botao-fechar shrink-0" onClick={onFechar} aria-label="Fechar">
+            <X size={20} aria-hidden="true" />
           </button>
         </div>
 
         <div className="text-center mb-5">
           <div
             className="avatar-funcionario"
+            aria-hidden="true"
             style={{
               backgroundColor: 'var(--primary)',
               width: '80px',
@@ -398,20 +596,22 @@ function DetalhesColaborador({
           >
             {iniciais(funcionario.nome)}
           </div>
-          <span className="inline-block bg-gray-200 px-4 py-1 rounded-full text-sm">{funcionario.cargoNome}</span>
+          <span className="inline-block max-w-full bg-gray-200 px-4 py-1 rounded-full text-sm [overflow-wrap:anywhere]">
+            {funcionario.cargoNome}
+          </span>
         </div>
 
         <div>
           <div className="linha-info">
             <span className="flex items-center gap-2 text-gray-500">
-              <Mail size={16} />
+              <Mail size={16} aria-hidden="true" />
               Email
             </span>
             <span className="text-gray-800 font-medium break-all">{funcionario.email ?? '—'}</span>
           </div>
           <div className="linha-info">
             <span className="flex items-center gap-2 text-gray-500">
-              <Phone size={16} />
+              <Phone size={16} aria-hidden="true" />
               Telefone
             </span>
             <span className="text-gray-800 font-medium">{funcionario.telefone ?? '—'}</span>
@@ -422,7 +622,7 @@ function DetalhesColaborador({
           </div>
           <div className="linha-info">
             <span className="flex items-center gap-2 text-gray-500">
-              <Smartphone size={16} />
+              <Smartphone size={16} aria-hidden="true" />
               Acesso ao app
             </span>
             <span className={`font-medium ${possuiAcessoApp ? 'text-green-600' : 'text-gray-800'}`}>
@@ -434,18 +634,30 @@ function DetalhesColaborador({
         {isRhOuAdmin && (
           <div className="mt-5 pt-4 border-t border-gray-200">
             {sucessoAcessoApp && (
-              <p className="m-0 mb-3 px-3 py-2 rounded-lg bg-green-50 border border-green-200 text-green-700 text-sm">
+              <p
+                role="status"
+                className="m-0 mb-3 px-3 py-2 rounded-lg bg-green-50 border border-green-200 text-green-700 text-sm"
+              >
                 {sucessoAcessoApp}
               </p>
             )}
-            {erroAcessoApp && <p className="text-red-600 text-sm mb-3">{erroAcessoApp}</p>}
+            {erroAcessoApp && (
+              <p
+                ref={erroAcessoRef}
+                tabIndex={-1}
+                role="alert"
+                className="text-red-600 text-sm mb-3 [overflow-wrap:anywhere] focus:outline-none"
+              >
+                {erroAcessoApp}
+              </p>
+            )}
 
             {!funcionario.email ? (
               <p className="m-0 mb-3 text-sm text-gray-500">
                 Cadastre um e-mail para este colaborador antes de criar o acesso ao app.
               </p>
             ) : editandoAcessoApp ? (
-              <form onSubmit={handleSalvarAcessoApp} className="mb-3 space-y-2">
+              <form onSubmit={handleSalvarAcessoApp} className="mb-3 space-y-2" noValidate>
                 <label htmlFor={`senha-app-${funcionario.id}`} className="block text-sm text-gray-600">
                   {possuiAcessoApp ? 'Nova senha do app' : 'Senha de acesso ao app'}
                 </label>
@@ -454,20 +666,27 @@ function DetalhesColaborador({
                   type="password"
                   value={senhaApp}
                   onChange={(e) => setSenhaApp(e.target.value)}
-                  minLength={TAMANHO_MINIMO_SENHA_APP}
+                  // O limite real (64 caracteres, emoji conta 1) é conferido
+                  // no envio; o maxLength do navegador conta em UTF-16.
+                  maxLength={SENHA_APP_MAXIMO * 2}
                   required
                   autoFocus
                   autoComplete="new-password"
-                  placeholder="Mínimo de 6 caracteres"
+                  placeholder={`De ${SENHA_APP_MINIMO} a ${SENHA_APP_MAXIMO} caracteres`}
+                  disabled={desligando}
                   className="w-full px-4 py-2 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
                 />
                 <div className="flex flex-col sm:flex-row gap-2">
                   <button
                     type="submit"
-                    disabled={salvandoAcessoApp}
+                    disabled={salvandoAcessoApp || desligando}
                     className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-60"
                   >
-                    {salvandoAcessoApp ? <Loader2 size={16} className="animate-spin" /> : <KeyRound size={16} />}
+                    {salvandoAcessoApp ? (
+                      <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+                    ) : (
+                      <KeyRound size={16} aria-hidden="true" />
+                    )}
                     Confirmar
                   </button>
                   <button
@@ -485,26 +704,46 @@ function DetalhesColaborador({
               </form>
             ) : (
               <button
+                type="button"
+                disabled={desligando}
                 onClick={() => {
                   setEditandoAcessoApp(true);
                   setErroAcessoApp(null);
                   setSucessoAcessoApp(null);
                 }}
-                className="w-full mb-3 flex items-center justify-center gap-2 px-4 py-2 rounded-lg border border-primary/40 text-primary hover:bg-primary/5 transition-colors"
+                className="w-full mb-3 flex items-center justify-center gap-2 px-4 py-2 rounded-lg border border-primary/40 text-primary hover:bg-primary/5 transition-colors disabled:opacity-60"
               >
-                <KeyRound size={16} />
+                <KeyRound size={16} aria-hidden="true" />
                 {possuiAcessoApp ? 'Redefinir senha do app' : 'Criar acesso ao app'}
               </button>
             )}
 
-            {erroDesligar && <p className="text-red-600 text-sm mb-3">{erroDesligar}</p>}
+            {erroDesligar && (
+              <p
+                ref={erroDesligarRef}
+                tabIndex={-1}
+                role="alert"
+                className="text-red-600 text-sm mb-3 [overflow-wrap:anywhere] focus:outline-none"
+              >
+                {erroDesligar}
+              </p>
+            )}
             <button
-              onClick={handleDesligar}
+              type="button"
+              onClick={() => {
+                setErroAcessoApp(null);
+                setSucessoAcessoApp(null);
+                onDesligar();
+              }}
               disabled={desligando}
               className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg border border-red-300 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-60"
             >
-              {desligando ? <Loader2 size={16} className="animate-spin" /> : <UserMinus size={16} />}
-              Desligar colaborador
+              {desligando ? (
+                <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+              ) : (
+                <UserMinus size={16} aria-hidden="true" />
+              )}
+              {desligando ? 'Desligando…' : 'Desligar colaborador'}
             </button>
           </div>
         )}
@@ -518,20 +757,40 @@ export function Organogram() {
   const [funcionarios, setFuncionarios] = useState<FuncionarioDto[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
+  const tituloRef = useRef<HTMLHeadingElement>(null);
+  const { avisarGlobal } = useAvisos();
+  const montadaRef = useRef(true);
+  // Carga em andamento: cancelada quando outra começa ou quando a tela sai.
+  const cargaRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    montadaRef.current = true;
+    return () => {
+      montadaRef.current = false;
+      cargaRef.current?.abort();
+    };
+  }, []);
 
   // `silencioso` recarrega sem trocar a árvore pelo spinner — assim o modal
-  // aberto (ex. depois de criar o acesso ao app) continua na tela.
-  async function carregar(silencioso = false) {
-    if (!token) return;
+  // aberto (ex. depois de criar o acesso ao app) continua na tela. Devolve
+  // os ativos carregados (ou null, se falhou ou foi cancelada).
+  async function carregar(silencioso = false): Promise<FuncionarioDto[] | null> {
+    if (!token || !montadaRef.current) return null;
+    cargaRef.current?.abort();
+    const controle = new AbortController();
+    cargaRef.current = controle;
     if (!silencioso) {
       setCarregando(true);
       setErro(null);
     }
     try {
-      const lista = await api.listarFuncionarios(token);
-      setFuncionarios(lista.filter((f) => f.status === StatusFuncionario.Ativo));
+      const lista = await api.listarFuncionarios(token, controle.signal);
+      if (!Array.isArray(lista)) throw new ApiError(0, MENSAGEM_RESPOSTA_INESPERADA);
+      const ativos = lista.filter((f) => f.status === StatusFuncionario.Ativo);
+      setFuncionarios(ativos);
+      return ativos;
     } catch (e) {
-      if (silencioso) return;
+      if (silencioso || controle.signal.aborted) return null;
       setErro(
         e instanceof ApiError && e.status === 403
           ? 'Só RH/Admin pode ver o organograma completo.'
@@ -539,8 +798,9 @@ export function Organogram() {
             ? e.message
             : 'Não foi possível carregar o organograma.'
       );
+      return null;
     } finally {
-      if (!silencioso) setCarregando(false);
+      if (!silencioso && !controle.signal.aborted) setCarregando(false);
     }
   }
 
@@ -549,12 +809,7 @@ export function Organogram() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  // A raiz com a maior equipe (o topo da hierarquia) vem primeiro; as outras
-  // são quem ficou sem gestor (cadastro incompleto, gestor desligado, ciclo).
-  const raizes = useMemo(
-    () => [...montarArvore(funcionarios)].sort((a, b) => tamanhoEquipe(b) - tamanhoEquipe(a)),
-    [funcionarios]
-  );
+  const raizes = useMemo(() => ordenarRaizes(montarArvore(funcionarios)), [funcionarios]);
 
   const porId = useMemo(() => {
     const mapa = new Map<number, NoOrganograma>();
@@ -564,47 +819,179 @@ export function Organogram() {
 
   const [selecionadoId, setSelecionadoId] = useState<number | null>(null);
   const selecionado = selecionadoId !== null ? porId.get(selecionadoId) : undefined;
+  // Cópia síncrona, lida quando a resposta do desligamento chega.
+  const selecionadoIdRef = useRef<number | null>(null);
+  selecionadoIdRef.current = selecionadoId;
+
+  function abrir(no: NoOrganograma) {
+    setSelecionadoId(no.id);
+  }
+
+  // Ao fechar, o foco volta para o card que abriu o modal (ou para o título,
+  // se o card saiu da árvore).
+  function fechar() {
+    const id = selecionadoIdRef.current;
+    setSelecionadoId(null);
+    requestAnimationFrame(() => {
+      const card = id !== null ? document.querySelector<HTMLElement>(`[data-no="${id}"]`) : null;
+      (card ?? tituloRef.current)?.focus();
+    });
+  }
+
+  // --- Desligamento ---
+  // A trava fica na tela, e não no modal: fechar e reabrir o card no meio do
+  // processo não libera o botão de novo (antes isso desligava duas vezes).
+  const desligandoRef = useRef(new Set<number>());
+  const [desligandoIds, setDesligandoIds] = useState<ReadonlySet<number>>(new Set());
+  const [errosDesligar, setErrosDesligar] = useState<Record<number, string>>({});
+  const [aviso, setAviso] = useState<{ tipo: 'sucesso' | 'erro'; texto: string } | null>(null);
+
+  function marcarDesligando(id: number, ativo: boolean) {
+    if (ativo) desligandoRef.current.add(id);
+    else desligandoRef.current.delete(id);
+    setDesligandoIds(new Set(desligandoRef.current));
+  }
+
+  async function desligar(no: NoOrganograma) {
+    if (!token || desligandoRef.current.has(no.id)) return;
+
+    if (!window.confirm(textoConfirmacaoDesligar(no, funcionarios))) return;
+
+    marcarDesligando(no.id, true);
+    setAviso(null);
+    setErrosDesligar((prev) => {
+      const copia = { ...prev };
+      delete copia[no.id];
+      return copia;
+    });
+    try {
+      // Um POST só: o backend move os subordinados na mesma transação e conta
+      // quantos foram (antes eram vários PUTs em série, que paravam no meio).
+      const resultado = await api.desligarFuncionario(token, no.id, { versao: no.versao });
+      const texto = descreverDesligamento(resultado?.funcionario?.nome ?? no.nome, resultado);
+      // Saiu da tela no meio: o resultado aparece como aviso global.
+      if (!montadaRef.current) {
+        avisarGlobal(texto, 'sucesso');
+        return;
+      }
+      setAviso({ tipo: 'sucesso', texto });
+      if (selecionadoIdRef.current === no.id) setSelecionadoId(null);
+      await carregar(true);
+      if (!document.activeElement || document.activeElement === document.body) tituloRef.current?.focus();
+    } catch (e) {
+      const mensagem = e instanceof ApiError ? e.message : 'Não foi possível desligar o colaborador.';
+      const textoErro = `Não foi possível desligar ${no.nome}. ${mensagem}`;
+      if (!montadaRef.current) {
+        avisarGlobal(textoErro, 'erro');
+        return;
+      }
+
+      // Alterado por outra pessoa (409), já desligado (400) ou não encontrado
+      // (404): atualiza a árvore e a `versao` para a próxima tentativa.
+      if (ehConflito(e) || (e instanceof ApiError && (e.status === 400 || e.status === 404))) {
+        const ativos = await carregar(true);
+        if (ativos && !ativos.some((f) => f.id === no.id)) {
+          // A pessoa já tinha saído (outra pessoa desligou antes). O card some
+          // da árvore e o modal fecha, mas com a explicação na tela e o foco
+          // num lugar previsível, em vez de sumir sem aviso.
+          setAviso({ tipo: 'erro', texto: textoErro });
+          if (selecionadoIdRef.current === no.id) setSelecionadoId(null);
+          requestAnimationFrame(() => tituloRef.current?.focus());
+          return;
+        }
+      }
+
+      setErrosDesligar((prev) => ({ ...prev, [no.id]: mensagem }));
+      // Com o modal dessa pessoa fechado, o erro aparece na própria tela.
+      if (selecionadoIdRef.current !== no.id) {
+        setAviso({ tipo: 'erro', texto: textoErro });
+      }
+    } finally {
+      marcarDesligando(no.id, false);
+    }
+  }
 
   return (
     // Ocupa a altura do <main>: a área da árvore fica com a altura que sobra
     // na janela e é a única parte que rola — a página em si fica parada.
     <div className="w-full h-full flex flex-col">
       <div className="mb-4 sm:mb-6 shrink-0">
-        <h1 className="m-0 text-2xl sm:text-3xl lg:text-[32px] text-gray-800 font-semibold">Organograma</h1>
+        <h1
+          ref={tituloRef}
+          tabIndex={-1}
+          className="m-0 text-2xl sm:text-3xl lg:text-[32px] text-gray-800 font-semibold focus:outline-none"
+        >
+          Organograma
+        </h1>
         <p className="mt-1 text-sm sm:text-base text-gray-500">
           Estrutura organizacional da empresa
-          {!carregando && !erro && funcionarios.length > 0 && ` · ${funcionarios.length} colaboradores`}
+          {!carregando && !erro && funcionarios.length > 0 && ` · ${contarColaboradores(funcionarios.length)}`}
         </p>
       </div>
 
+      {aviso && (
+        <div
+          role={aviso.tipo === 'erro' ? 'alert' : 'status'}
+          className={`mb-4 shrink-0 flex items-start justify-between gap-3 px-4 py-3 rounded-lg border text-sm ${
+            aviso.tipo === 'erro' ? 'bg-red-50 border-red-200 text-red-600' : 'bg-green-50 border-green-200 text-green-700'
+          }`}
+        >
+          <span className="min-w-0 [overflow-wrap:anywhere]">{aviso.texto}</span>
+          <button
+            type="button"
+            onClick={() => setAviso(null)}
+            className="shrink-0 p-0.5 rounded hover:bg-black/5"
+            aria-label="Fechar aviso"
+          >
+            <X size={16} aria-hidden="true" />
+          </button>
+        </div>
+      )}
+
       {carregando && (
-        <div className="flex items-center justify-center py-16 text-muted-foreground gap-2">
-          <Loader2 className="w-5 h-5 animate-spin" />
+        <div className="flex items-center justify-center py-16 text-muted-foreground gap-2" role="status">
+          <Loader2 className="w-5 h-5 animate-spin" aria-hidden="true" />
           Carregando organograma…
         </div>
       )}
 
       {erro && !carregando && (
-        <div className="px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-600 text-sm">{erro}</div>
+        <div
+          role="alert"
+          className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-600 text-sm"
+        >
+          <span className="min-w-0 [overflow-wrap:anywhere]">{erro}</span>
+          <button
+            type="button"
+            onClick={() => carregar()}
+            className="px-3 py-1.5 rounded-lg border border-red-300 bg-white text-red-600 hover:bg-red-50 transition-colors shrink-0"
+          >
+            Tentar novamente
+          </button>
+        </div>
       )}
 
       {!carregando && !erro && raizes.length === 0 && (
         <p className="text-muted-foreground">Nenhum funcionário cadastrado ainda.</p>
       )}
 
-      {!carregando && !erro && raizes.length > 0 && (
-        <VisualizacaoOrganograma raizes={raizes} onAbrir={(no) => setSelecionadoId(no.id)} />
-      )}
+      {!carregando && !erro && raizes.length > 0 && <VisualizacaoOrganograma raizes={raizes} onAbrir={abrir} />}
 
       {selecionado && (
         <DetalhesColaborador
           key={selecionado.id}
           funcionario={selecionado}
-          onFechar={() => setSelecionadoId(null)}
-          onDesligado={() => {
-            setSelecionadoId(null);
-            carregar();
-          }}
+          desligando={desligandoIds.has(selecionado.id)}
+          erroDesligar={errosDesligar[selecionado.id] ?? null}
+          onFechar={fechar}
+          onDesligar={() => desligar(selecionado)}
+          onLimparErroDesligar={() =>
+            setErrosDesligar((prev) => {
+              const copia = { ...prev };
+              delete copia[selecionado.id];
+              return copia;
+            })
+          }
           onAcessoAppAlterado={() => carregar(true)}
         />
       )}

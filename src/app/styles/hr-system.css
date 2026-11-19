@@ -68,6 +68,9 @@
   align-items: center;
   gap: 10px;
   font-size: 15px;
+  /* Os itens que trocam de tela são links (<a href="#/...">). */
+  text-decoration: none;
+  box-sizing: border-box;
 }
 
 .botao-menu:hover {
@@ -314,15 +317,28 @@
   flex-wrap: wrap;
 }
 
+/* min-width: 0 e overflow-wrap: anywhere deixam um valor longo sem espaço
+   (departamento, telefone, cargo) quebrar dentro da linha: só break-word
+   não reduz a largura mínima do item e esticava o modal para os lados. */
 .linha-info > span:last-child {
   text-align: right;
-  word-break: break-word;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* O conteúdo do modal recebe o foco ao abrir (para o leitor de tela
+   anunciar o diálogo); o contorno fica só nos controles de dentro. */
+.modal-conteudo:focus {
+  outline: none;
 }
 
 /* ===== Responsividade ===== */
 
-/* Tablets e abaixo */
-@media (max-width: 1024px) {
+/* Tablets e abaixo. O limite é 1023.98px, e não 1024px, porque o breakpoint
+   `lg` do Tailwind (lg:static, lg:hidden) começa em 1024px: com 1024px as
+   duas regras valiam juntas, o menu ficava fixo por cima do conteúdo e o
+   botão de abrir o menu sumia. */
+@media (max-width: 1023.98px) {
   .sidebar {
     position: fixed;
     width: 260px;
@@ -381,4 +397,23 @@
 .sidebar nav::-webkit-scrollbar-thumb {
   background-color: #4b5563;
   border-radius: 3px;
+}
+
+/* Impressão do holerite (Meus Dados > Holerite > Imprimir): só o holerite
+   escolhido vai para o papel, sem o menu e sem as outras abas. */
+.impressao-holerite {
+  display: none;
+}
+
+@media print {
+  body.imprimindo-holerite #root {
+    display: none !important;
+  }
+
+  body.imprimindo-holerite .impressao-holerite {
+    display: block;
+    padding: 24px;
+    color: #111827;
+    font-size: 14px;
+  }
 }

@@ -1,15 +1,52 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useRef } from 'react';
 import { Utensils, Save, Calendar, Loader2 } from 'lucide-react';
-import { api, ApiError } from '../../services/api';
+import { api, ApiError, ehConflito } from '../../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useFuncionarios } from '../hooks/useFuncionarios';
+import { useEnvioPorColaborador } from '../hooks/useEnvioPorColaborador';
+import { useDevolverFocoAoTerminar } from '../hooks/useDevolverFoco';
+import { useConfirmarSaida } from '../context/AvisosContext';
 import { StatusFuncionario, type FuncionarioDto } from '../../types/api';
 import { ListaColaboradores } from './ListaColaboradores';
-import { formatarMoeda, lerValor } from '../../utils/moeda';
-import { formatarDataCalendario, hojeEmBrasilia } from '../../utils/datas';
+import {
+  formatarMoeda,
+  lerValorMonetario,
+  mensagemConfirmacaoVariacao,
+  pedeConfirmacao,
+  previaMonetaria,
+  validarVale,
+} from '../../utils/moeda';
+import { dataIso, formatarDataCalendario, hojeEmBrasilia } from '../../utils/datas';
 import { iniciais } from '../../utils/funcionarios';
+import { MOTIVO_MAXIMO, contarCaracteres, limparTextoLongo, validarMotivo, validarVigencia, vigenciaMaxima } from '../../utils/validacao';
 
-const TAMANHO_MINIMO_MOTIVO = 3;
+interface Referencia {
+  rotulo: string;
+  valor: number;
+}
+
+// Resumo dos valores de vale em uso hoje. Substitui a tabela fixa que citava
+// cargos que não existem no cadastro.
+function calcularReferencias(ativos: FuncionarioDto[], selecionado: FuncionarioDto | null): Referencia[] {
+  const valores = ativos.map((f) => f.valeAlimentacao).filter((v) => Number.isFinite(v));
+  if (valores.length === 0) return [];
+  const media = (lista: number[]) => lista.reduce((soma, v) => soma + v, 0) / lista.length;
+  const referencias: Referencia[] = [
+    { rotulo: `Média dos ${valores.length} colaboradores ativos`, valor: media(valores) },
+    { rotulo: 'Menor valor atual', valor: Math.min(...valores) },
+    { rotulo: 'Maior valor atual', valor: Math.max(...valores) },
+  ];
+  if (selecionado) {
+    const mesmoCargo = ativos.filter((f) => f.cargoId === selecionado.cargoId).map((f) => f.valeAlimentacao);
+    if (mesmoCargo.length > 1) {
+      referencias.push({
+        rotulo: `Média no cargo ${selecionado.cargoNome} (${mesmoCargo.length} pessoas)`,
+        valor: media(mesmoCargo),
+      });
+    }
+  }
+  return referencias;
+}
 
 export function MealVoucherAdjustment() {
   const { token } = useAuth();
@@ -18,65 +55,119 @@ export function MealVoucherAdjustment() {
   const [novoValorTexto, setNovoValorTexto] = useState('');
   const [dataVigencia, setDataVigencia] = useState(hojeEmBrasilia);
   const [motivo, setMotivo] = useState('');
-  const [salvando, setSalvando] = useState(false);
-  const [erroSalvar, setErroSalvar] = useState<string | null>(null);
-  const [sucesso, setSucesso] = useState<string | null>(null);
+  // Resultado do último envio por colaborador, trava e indicador de "salvando"
+  // (ver useEnvioPorColaborador).
+  const envio = useEnvioPorColaborador(selecionadoId);
+  // O máximo conta todos os code points, como a API (o contador "x/500").
+  const tamanhoMotivo = contarCaracteres(limparTextoLongo(motivo));
+  const motivoLongoDemais = tamanhoMotivo > MOTIVO_MAXIMO;
+  // Quando o envio termina, o foco vai para o aviso do resultado (ou para o
+  // botão), em vez de ficar perdido no BODY com o botão desabilitado (V5-01).
+  const resultadoRef = useRef<HTMLDivElement>(null);
+  const botaoAplicarRef = useRef<HTMLButtonElement>(null);
+  // Só quando o envio que terminou é do colaborador na tela (V6-03).
+  useDevolverFocoAoTerminar(envio.salvandoId, selecionadoId, [resultadoRef, botaoAplicarRef]);
 
   const ativos = useMemo(() => funcionarios.filter((f) => f.status === StatusFuncionario.Ativo), [funcionarios]);
   const selecionado = ativos.find((f) => f.id === selecionadoId) ?? null;
+  const referencias = useMemo(() => calcularReferencias(ativos, selecionado), [ativos, selecionado]);
+  const admissao = dataIso(selecionado?.dataAdmissao);
+  const vigenciaLimite = vigenciaMaxima(admissao);
+  const admissaoFutura = admissao !== null && admissao > hojeEmBrasilia();
 
-  const novoValor = lerValor(novoValorTexto);
+  const novoValor = lerValorMonetario(novoValorTexto);
+  const previa = previaMonetaria(novoValorTexto);
   const diferenca = selecionado && novoValor !== null ? novoValor - selecionado.valeAlimentacao : 0;
+  const avisoAtual = envio.resultadoAtual;
 
-  function handleSelecionar(funcionario: FuncionarioDto) {
-    setSelecionadoId(funcionario.id);
+  // Sair da tela com um ajuste digitado e não enviado pede confirmação.
+  useConfirmarSaida(!envio.salvando && (novoValorTexto.trim() !== '' || motivo.trim() !== ''));
+
+  // A vigência começa no último dia aceito: hoje, ou a própria admissão para
+  // quem ainda vai ser admitido.
+  function limparFormulario(funcionario: FuncionarioDto) {
     setNovoValorTexto('');
     setMotivo('');
-    setDataVigencia(hojeEmBrasilia());
-    setErroSalvar(null);
-    setSucesso(null);
+    setDataVigencia(vigenciaMaxima(dataIso(funcionario.dataAdmissao)));
+  }
+
+  // O resultado do último envio de cada colaborador fica guardado e volta a
+  // aparecer quando ele é selecionado de novo.
+  function handleSelecionar(funcionario: FuncionarioDto) {
+    if (funcionario.id === selecionadoId) return;
+    setSelecionadoId(funcionario.id);
+    limparFormulario(funcionario);
   }
 
   async function handleSalvar() {
-    if (!token || !selecionado) return;
-    setErroSalvar(null);
-    setSucesso(null);
+    if (!token || !selecionado || envio.salvando) return;
+    const alvo = selecionado;
+    const erroDe = (mensagem: string) => envio.erroDeValidacao(alvo.id, mensagem);
 
-    if (novoValor === null) {
-      setErroSalvar('Informe o novo valor do vale alimentação.');
+    if (!novoValorTexto.trim()) {
+      erroDe('Informe o novo valor do vale alimentação.');
       return;
     }
-    if (novoValor < 0) {
-      setErroSalvar('O valor do vale alimentação não pode ser negativo.');
+    const erroValor = validarVale(novoValor);
+    if (erroValor || novoValor === null) {
+      erroDe(erroValor ?? 'Informe o novo valor do vale alimentação.');
       return;
     }
-    if (!dataVigencia) {
-      setErroSalvar('Informe a data de vigência.');
+    if (novoValor === alvo.valeAlimentacao) {
+      erroDe('O novo valor é igual ao atual.');
       return;
     }
-    const motivoLimpo = motivo.trim();
-    if (motivoLimpo.length < TAMANHO_MINIMO_MOTIVO) {
-      setErroSalvar(`Descreva o motivo do ajuste (mínimo de ${TAMANHO_MINIMO_MOTIVO} caracteres).`);
+    const erroVigencia = validarVigencia(dataVigencia, dataIso(alvo.dataAdmissao));
+    if (erroVigencia) {
+      erroDe(erroVigencia);
+      return;
+    }
+    // Mesmas mensagens da API ("O motivo…", "Informe o motivo do ajuste.").
+    const erroMotivo = validarMotivo(motivo);
+    if (erroMotivo) {
+      // Acima do limite, a mesma mensagem já está embaixo do campo: não repete
+      // e apaga o resultado anterior desse colaborador, que já não vale (V6-01).
+      if (motivoLongoDemais) {
+        envio.limparResultado(alvo.id);
+        document.getElementById('motivoVale')?.focus();
+      } else {
+        erroDe(erroMotivo);
+      }
+      return;
+    }
+    if (
+      pedeConfirmacao(alvo.valeAlimentacao, novoValor) &&
+      !window.confirm(
+        mensagemConfirmacaoVariacao(`O vale alimentação de ${alvo.nome}`, alvo.valeAlimentacao, novoValor)
+      )
+    ) {
       return;
     }
 
-    setSalvando(true);
+    if (!envio.iniciar(alvo.id)) return;
     try {
-      const atualizado = await api.ajustarValeAlimentacao(token, selecionado.id, {
+      const atualizado = await api.ajustarValeAlimentacao(token, alvo.id, {
         novoValor,
         dataVigencia,
-        motivo: motivoLimpo,
+        // Mantém as quebras de linha (no máximo 2 seguidas), como a API grava.
+        motivo: limparTextoLongo(motivo),
+        versao: alvo.versao,
       });
       substituir(atualizado);
-      setSucesso(
-        `Vale alimentação de ${atualizado.nome} ajustado de ${formatarMoeda(selecionado.valeAlimentacao)} para ${formatarMoeda(novoValor)}, com vigência em ${formatarDataCalendario(dataVigencia)}.`
-      );
-      setNovoValorTexto('');
-      setMotivo('');
+      envio.concluir(alvo.id, {
+        tipo: 'sucesso',
+        mensagem: `Vale alimentação de ${atualizado.nome} ajustado de ${formatarMoeda(alvo.valeAlimentacao)} para ${formatarMoeda(atualizado.valeAlimentacao)}, com vigência em ${formatarDataCalendario(dataVigencia)}.`,
+      });
+      if (envio.aindaSelecionado(alvo.id)) limparFormulario(alvo);
     } catch (e) {
-      setErroSalvar(e instanceof ApiError ? e.message : 'Não foi possível ajustar o vale alimentação.');
+      const motivoErro = e instanceof ApiError ? e.message : 'Não foi possível ajustar o vale alimentação.';
+      if (ehConflito(e)) recarregar();
+      const mensagem = ehConflito(e)
+        ? `${motivoErro} Os dados foram recarregados; confira o valor atual antes de aplicar de novo.`
+        : motivoErro;
+      envio.concluir(alvo.id, { tipo: 'erro', mensagem }, `O vale alimentação de ${alvo.nome} não foi ajustado: ${motivoErro}`);
     } finally {
-      setSalvando(false);
+      envio.encerrar();
     }
   }
 
@@ -87,7 +178,7 @@ export function MealVoucherAdjustment() {
           <div className="p-2 bg-primary/10 rounded-lg shrink-0">
             <Utensils className="w-5 h-5 sm:w-6 sm:h-6 text-primary" />
           </div>
-          <h1 className="text-2xl sm:text-3xl">Ajuste Vale Alimentação</h1>
+          <h1 className="text-2xl sm:text-3xl">Vale Alimentação</h1>
         </div>
         <p className="text-sm sm:text-base text-muted-foreground">
           Gerencie e ajuste os valores de vale alimentação dos colaboradores
@@ -106,14 +197,26 @@ export function MealVoucherAdjustment() {
           mensagemVazia="Nenhum colaborador ativo cadastrado."
           renderItem={(funcionario) => (
             <>
-              <h3 className="font-medium mb-1 break-words">{funcionario.nome}</h3>
+              <div className="flex items-start justify-between gap-2 mb-1">
+                <h3 className="font-medium break-words [overflow-wrap:anywhere] min-w-0">{funcionario.nome}</h3>
+                {envio.salvandoId === funcionario.id && (
+                  <span className="shrink-0 inline-flex items-center gap-1 text-xs text-primary" role="status">
+                    <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" />
+                    Salvando…
+                  </span>
+                )}
+              </div>
               <p className="text-sm text-muted-foreground mb-2 break-all">{funcionario.email ?? 'Sem e-mail'}</p>
               <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
-                <div className="flex gap-2 flex-wrap">
-                  <span className="text-xs px-2 py-1 bg-accent rounded-full">{funcionario.departamentoNome}</span>
-                  <span className="text-xs px-2 py-1 bg-accent rounded-full">{funcionario.cargoNome}</span>
+                <div className="flex gap-2 flex-wrap min-w-0">
+                  <span className="text-xs px-2 py-1 bg-accent rounded-full max-w-full [overflow-wrap:anywhere]">
+                    {funcionario.departamentoNome}
+                  </span>
+                  <span className="text-xs px-2 py-1 bg-accent rounded-full max-w-full [overflow-wrap:anywhere]">
+                    {funcionario.cargoNome}
+                  </span>
                 </div>
-                <span className="text-sm font-medium text-primary whitespace-nowrap">
+                <span className="text-sm font-medium text-primary whitespace-nowrap shrink-0">
                   {formatarMoeda(funcionario.valeAlimentacao)}
                 </span>
               </div>
@@ -122,7 +225,7 @@ export function MealVoucherAdjustment() {
         />
 
         {/* Formulário de Ajuste */}
-        <div className="hr-card p-4 sm:p-6">
+        <div className="hr-card p-4 sm:p-6 min-w-0">
           <h2 className="text-xl mb-4">Aplicar Ajuste</h2>
 
           {selecionado ? (
@@ -134,8 +237,10 @@ export function MealVoucherAdjustment() {
                     {iniciais(selecionado.nome)}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <h3 className="font-medium break-words">{selecionado.nome}</h3>
-                    <p className="text-sm text-muted-foreground break-words">{selecionado.cargoNome}</p>
+                    <h3 className="font-medium break-words [overflow-wrap:anywhere]">{selecionado.nome}</h3>
+                    <p className="text-sm text-muted-foreground break-words [overflow-wrap:anywhere]">
+                      {selecionado.cargoNome}
+                    </p>
                   </div>
                 </div>
                 <div className="flex flex-wrap justify-between items-center gap-2 mt-3 pt-3 border-t border-border">
@@ -151,17 +256,28 @@ export function MealVoucherAdjustment() {
                 </label>
                 <div className="relative">
                   <Utensils className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+                  {/* Texto, e não type=number, para "1.000,00" ser lido como mil em qualquer navegador. */}
                   <input
                     id="novoValorVale"
-                    type="number"
-                    step="0.01"
-                    min="0"
+                    type="text"
+                    inputMode="decimal"
+                    autoComplete="off"
+                    maxLength={20}
                     value={novoValorTexto}
                     onChange={(e) => setNovoValorTexto(e.target.value)}
-                    placeholder="Ex: 700.00"
+                    placeholder="Ex: 700,00"
+                    aria-describedby="novoValorValePrevia"
+                    aria-invalid={previa ? !previa.valido : undefined}
                     className="w-full pl-10 pr-4 py-3 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
                   />
                 </div>
+                <p
+                  id="novoValorValePrevia"
+                  aria-live="polite"
+                  className={`mt-1.5 text-xs min-h-[1rem] ${previa && !previa.valido ? 'text-red-600' : 'text-muted-foreground'}`}
+                >
+                  {previa?.texto ?? 'De R$ 0,00 a R$ 10.000,00, no formato 1.234,56.'}
+                </p>
               </div>
 
               {/* Data de Vigência */}
@@ -175,10 +291,15 @@ export function MealVoucherAdjustment() {
                     id="dataVigenciaVale"
                     type="date"
                     value={dataVigencia}
+                    min={admissao ?? undefined}
+                    max={vigenciaLimite}
                     onChange={(e) => setDataVigencia(e.target.value)}
                     className="w-full pl-10 pr-4 py-3 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
                   />
                 </div>
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  {admissaoFutura ? 'Admissão futura: a vigência é a própria data de admissão.' : 'Da admissão até hoje.'}
+                </p>
               </div>
 
               {/* Motivo */}
@@ -188,12 +309,30 @@ export function MealVoucherAdjustment() {
                 </label>
                 <textarea
                   id="motivoVale"
+                  aria-invalid={motivoLongoDemais || undefined}
+                  aria-describedby="motivoVale-contagem"
                   value={motivo}
                   onChange={(e) => setMotivo(e.target.value)}
                   placeholder="Descreva o motivo do ajuste..."
                   rows={3}
-                  className="w-full px-4 py-3 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+                  maxLength={MOTIVO_MAXIMO * 2}
+                  className="w-full px-4 py-3 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary resize-y"
                 />
+                {/* Acima do limite, o contador fica vermelho e o erro aparece na hora,
+                    sem esperar o envio (V2-06). */}
+                <p
+                  id="motivoVale-contagem"
+                  aria-live="polite"
+                  className={`mt-1 text-xs text-right ${motivoLongoDemais ? 'text-red-600 font-medium' : 'text-muted-foreground'}`}
+                >
+                  {tamanhoMotivo}/{MOTIVO_MAXIMO}
+                  {motivoLongoDemais ? ` (${tamanhoMotivo - MOTIVO_MAXIMO} a mais)` : ''}
+                </p>
+                {motivoLongoDemais && (
+                  <p role="alert" className="m-0 text-xs text-red-600">
+                    O motivo pode ter no máximo {MOTIVO_MAXIMO} caracteres.
+                  </p>
+                )}
               </div>
 
               {/* Prévia do Novo Valor */}
@@ -213,41 +352,51 @@ export function MealVoucherAdjustment() {
                     </div>
                     <div className="flex flex-wrap justify-between gap-2 pt-2 border-t border-border">
                       <span className="font-medium">Novo Valor:</span>
-                      <span className="font-medium text-primary text-lg">{formatarMoeda(novoValor)}</span>
+                      <span className="font-medium text-primary text-lg break-all">{formatarMoeda(novoValor)}</span>
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* Valores de Referência */}
-              <div className="p-4 bg-accent/20 rounded-lg border border-border">
-                <h4 className="text-sm font-medium mb-2">Valores de Referência</h4>
-                <div className="space-y-1 text-sm text-muted-foreground">
-                  <p>• Estagiário: R$ 400,00</p>
-                  <p>• Analista Júnior: R$ 500,00</p>
-                  <p>• Analista Pleno/Sênior: R$ 600,00</p>
-                  <p>• Coordenador: R$ 750,00</p>
-                  <p>• Gerente: R$ 800,00</p>
+              {/* Valores de Referência (dados reais dos colaboradores ativos) */}
+              {referencias.length > 0 && (
+                <div className="p-4 bg-accent/20 rounded-lg border border-border">
+                  <h4 className="text-sm font-medium mb-2">Valores de Referência</h4>
+                  <dl className="m-0 space-y-1 text-sm text-muted-foreground">
+                    {referencias.map((ref) => (
+                      <div key={ref.rotulo} className="flex flex-wrap justify-between gap-x-3">
+                        <dt className="min-w-0 [overflow-wrap:anywhere]">{ref.rotulo}</dt>
+                        <dd className="m-0 whitespace-nowrap">{formatarMoeda(ref.valor)}</dd>
+                      </div>
+                    ))}
+                  </dl>
                 </div>
-              </div>
-
-              {erroSalvar && (
-                <div className="px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-600 text-sm">{erroSalvar}</div>
               )}
-              {sucesso && (
-                <div className="px-4 py-3 rounded-lg bg-green-50 border border-green-200 text-green-700 text-sm">
-                  {sucesso}
+
+              {avisoAtual?.tipo === 'erro' && (
+                <div ref={resultadoRef} tabIndex={-1} role="alert" className="px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-red-600 text-sm break-words">
+                  {avisoAtual.mensagem}
+                </div>
+              )}
+              {avisoAtual?.tipo === 'sucesso' && (
+                <div ref={resultadoRef} tabIndex={-1} role="status" className="px-4 py-3 rounded-lg bg-green-50 border border-green-200 text-green-700 text-sm break-words [overflow-wrap:anywhere]">
+                  {avisoAtual.mensagem}
                 </div>
               )}
 
               {/* Botão Salvar */}
               <button
                 type="button"
+                ref={botaoAplicarRef}
                 onClick={handleSalvar}
-                disabled={salvando}
+                disabled={envio.salvando}
                 className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-primary text-primary-foreground rounded-lg hover:opacity-90 transition-opacity disabled:opacity-60"
               >
-                {salvando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                {envio.salvandoId === selecionado.id ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Save className="w-4 h-4" />
+                )}
                 <span>Aplicar Ajuste</span>
               </button>
             </div>

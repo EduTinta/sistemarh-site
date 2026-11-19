@@ -57,3 +57,40 @@ export function hojeEmBrasilia(): string {
   const valor = (tipo: Intl.DateTimeFormatPartTypes) => partes.find((p) => p.type === tipo)?.value ?? '';
   return `${valor('year')}-${valor('month')}-${valor('day')}`;
 }
+
+/** "2024-03-15T00:00:00" → "2024-03-15" (a parte de calendário, sem passar por Date). */
+export function dataIso(valor: string | null | undefined): string | null {
+  return valor?.match(/^\d{4}-\d{2}-\d{2}/)?.[0] ?? null;
+}
+
+function partesIso(iso: string): [number, number, number] {
+  const [ano, mes, dia] = iso.split('-').map(Number);
+  return [ano, mes, dia];
+}
+
+// Date.UTC trata os anos 0 a 99 como 1900 a 1999; setUTCFullYear não.
+function dataUtc(ano: number, mes: number, dia: number): Date {
+  const data = new Date(0);
+  data.setUTCFullYear(ano, mes - 1, dia);
+  return data;
+}
+
+function paraIso(data: Date): string {
+  const ano = String(data.getUTCFullYear()).padStart(4, '0');
+  const mes = String(data.getUTCMonth() + 1).padStart(2, '0');
+  const dia = String(data.getUTCDate()).padStart(2, '0');
+  return `${ano}-${mes}-${dia}`;
+}
+
+/** Soma (ou subtrai) dias a uma data "YYYY-MM-DD". */
+export function somarDias(iso: string, dias: number): string {
+  const [ano, mes, dia] = partesIso(iso);
+  return paraIso(dataUtc(ano, mes, dia + dias));
+}
+
+/** Soma (ou subtrai) anos a uma data "YYYY-MM-DD"; 29/02 vira 28/02 em ano não bissexto. */
+export function somarAnos(iso: string, anos: number): string {
+  const [ano, mes, dia] = partesIso(iso);
+  const ultimoDiaDoMes = dataUtc(ano + anos, mes + 1, 0).getUTCDate();
+  return paraIso(dataUtc(ano + anos, mes, Math.min(dia, ultimoDiaDoMes)));
+}
